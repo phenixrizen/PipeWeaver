@@ -9,7 +9,7 @@ defineProps<{ preview?: PreviewResult }>();
     <div class="mb-4 flex items-center justify-between gap-3">
       <div>
         <p class="panel-title">Preview output</p>
-        <p class="mt-2 text-sm leading-6 text-gray-600">
+        <p class="mt-2 text-sm leading-6 text-slate-600">
           Inspect transformed output and runtime metadata.
         </p>
       </div>
@@ -21,7 +21,7 @@ defineProps<{ preview?: PreviewResult }>();
       </span>
     </div>
     <pre
-      class="min-h-56 overflow-auto rounded-2xl border border-gray-200 bg-gray-900 p-4 text-xs text-gray-100"
+      class="min-h-56 overflow-auto rounded-3xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100"
       >{{
         preview?.encodedOutput || "Run a preview to see transformed output."
       }}</pre

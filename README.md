@@ -50,10 +50,7 @@ PipeWeaver helps teams define pipelines that:
 go mod tidy
 go test ./...
 go run ./cmd/pipeweaver-api
-go run ./cmd/pipeweaver-api -seed-examples
 ```
-
-Run the API with `-seed-examples` to copy the bundled files from `examples/pipelines` into the active store root so they appear in the UI. Use `-seed-source` to point at a different directory, and `PIPEWEAVER_STORE_ROOT` if you want to seed a non-default store location.
 
 ### Frontend
 

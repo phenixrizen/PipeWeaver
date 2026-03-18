@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import PipeWeaverLogo from "./PipeWeaverLogo.vue";
 
 const props = defineProps<{ open: boolean }>();
 defineEmits<{ close: [] }>();
@@ -27,7 +28,7 @@ const isActive = (to: string) =>
 <template>
   <div class="min-w-fit">
     <div
-      class="fixed inset-0 z-40 bg-gray-900/30 transition-opacity duration-200 lg:hidden"
+      class="fixed inset-0 z-40 bg-slate-950/35 transition-opacity duration-200 lg:hidden"
       :class="open ? 'opacity-100' : 'pointer-events-none opacity-0'"
       aria-hidden="true"
       @click="$emit('close')"
@@ -35,36 +36,14 @@ const isActive = (to: string) =>
 
     <aside
       id="app-sidebar"
-      class="absolute left-0 top-0 z-50 flex h-[100dvh] w-72 shrink-0 flex-col overflow-y-auto border-r border-gray-200 bg-white p-4 transition-transform duration-200 ease-in-out lg:static lg:z-auto lg:translate-x-0"
+      class="absolute left-0 top-0 z-50 flex h-[100dvh] w-80 shrink-0 flex-col overflow-y-auto border-r border-white/60 bg-[radial-gradient(circle_at_top,_rgba(139,92,246,0.12),_transparent_35%),linear-gradient(180deg,_#ffffff,_#f8fafc)] p-5 transition-transform duration-200 ease-in-out lg:static lg:z-auto lg:translate-x-0"
       :class="open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'"
     >
-      <div class="mb-8 flex items-center justify-between gap-3 px-2 pt-2">
-        <div class="flex items-center gap-3">
-          <div
-            class="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-500 text-white shadow-sm"
-          >
-            <svg
-              class="h-5 w-5 fill-current"
-              viewBox="0 0 32 32"
-              aria-hidden="true"
-            >
-              <path
-                d="M29.2 14.8C28.67 7.63 22.94 1.9 15.77 1.37v5.2a8.23 8.23 0 0 0 8.23 8.23h5.2ZM13.34 24.2v5.2C6.17 28.87.44 23.14-.09 15.97h5.2a8.23 8.23 0 0 1 8.23 8.23Zm10.66-8.23h5.2c-.53 7.17-6.26 12.9-13.43 13.43v-5.2A8.23 8.23 0 0 1 24 15.97ZM-.09 14.8C.44 7.63 6.17 1.9 13.34 1.37v5.2a8.23 8.23 0 0 1-8.23 8.23h-5.2Z"
-              />
-            </svg>
-          </div>
-          <div>
-            <p
-              class="text-xs font-semibold uppercase tracking-[0.28em] text-violet-500"
-            >
-              PipeWeaver
-            </p>
-            <p class="text-sm font-semibold text-gray-900">Operations hub</p>
-          </div>
-        </div>
+      <div class="mb-8 flex items-center justify-between gap-3 pt-2">
+        <PipeWeaverLogo />
 
         <button
-          class="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-500 transition hover:bg-gray-100 lg:hidden"
+          class="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100 lg:hidden"
           type="button"
           @click="$emit('close')"
         >
@@ -78,39 +57,37 @@ const isActive = (to: string) =>
       </div>
 
       <div
-        class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4 shadow-sm"
+        class="rounded-3xl border border-white/70 bg-white/80 px-5 py-5 shadow-lg shadow-slate-200/50 backdrop-blur"
       >
-        <p class="text-sm font-semibold text-gray-900">Seed-ready examples</p>
-        <p class="mt-1 text-sm text-gray-600">
-          Start the API with
-          <code class="rounded bg-gray-900 px-1.5 py-0.5 text-[11px] text-white"
-            >-seed-examples</code
-          >
-          to make bundled examples visible in the UI.
+        <p class="text-sm font-semibold text-slate-900">Live HTTP ingestion</p>
+        <p class="mt-2 text-sm leading-6 text-slate-600">
+          Configure an HTTP source, enable response mode on the target, and use
+          the generated curl command in the editor to test real request/response
+          flows.
         </p>
       </div>
 
       <div class="mt-8">
         <p
-          class="px-3 text-xs font-semibold uppercase tracking-[0.24em] text-gray-400"
+          class="px-3 text-xs font-semibold uppercase tracking-[0.24em] text-slate-400"
         >
           Workspace
         </p>
-        <nav class="mt-3 space-y-1">
+        <nav class="mt-3 space-y-2">
           <RouterLink
             v-for="item in navItems"
             :key="item.to"
             :to="item.to"
-            class="block rounded-2xl border px-3 py-3 transition"
+            class="block rounded-2xl border px-4 py-3 transition"
             :class="
               isActive(item.to)
-                ? 'border-violet-200 bg-violet-50 text-violet-700 shadow-sm'
-                : 'border-transparent text-gray-600 hover:border-gray-200 hover:bg-gray-50 hover:text-gray-900'
+                ? 'border-violet-200 bg-violet-50/80 text-violet-700 shadow-sm'
+                : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-900'
             "
             @click="$emit('close')"
           >
             <p class="text-sm font-semibold">{{ item.label }}</p>
-            <p class="mt-1 text-xs leading-5 text-gray-500">
+            <p class="mt-1 text-xs leading-5 text-slate-500">
               {{ item.description }}
             </p>
           </RouterLink>
@@ -118,12 +95,12 @@ const isActive = (to: string) =>
       </div>
 
       <div
-        class="mt-auto rounded-2xl bg-gray-900 px-4 py-4 text-white shadow-sm"
+        class="mt-auto rounded-3xl bg-slate-950 px-5 py-5 text-white shadow-xl shadow-slate-300/30"
       >
-        <p class="text-sm font-semibold">Template notes</p>
-        <p class="mt-1 text-sm text-gray-300">
-          This layout adapts the Cruip dashboard aesthetic to PipeWeaver’s
-          Vue-based editor and pipeline catalog.
+        <p class="text-sm font-semibold">Studio notes</p>
+        <p class="mt-2 text-sm leading-6 text-slate-300">
+          Drag CSV columns into schema targets, let AI suggestions pre-wire the
+          obvious matches, then preview or expose the flow as an endpoint.
         </p>
       </div>
     </aside>

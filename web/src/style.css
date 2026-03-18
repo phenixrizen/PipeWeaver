@@ -7,10 +7,15 @@
 @layer base {
   :root {
     font-family: "Inter", sans-serif;
+    color-scheme: light;
+  }
+
+  html {
+    @apply bg-slate-100;
   }
 
   body {
-    @apply min-h-screen bg-gray-100 text-gray-900 antialiased;
+    @apply min-h-screen bg-[radial-gradient(circle_at_top,_rgba(139,92,246,0.10),_transparent_30%),linear-gradient(180deg,_#f8fafc,_#eef2ff_70%,_#f8fafc)] text-slate-900 antialiased;
   }
 
   #app {
@@ -20,26 +25,26 @@
 
 @layer components {
   .panel {
-    @apply rounded-2xl border border-gray-200 bg-white shadow-sm;
+    @apply rounded-3xl border border-white/70 bg-white shadow-lg shadow-slate-200/50 backdrop-blur;
   }
 
   .panel-title {
-    @apply text-xs font-semibold uppercase tracking-[0.24em] text-gray-400;
+    @apply text-xs font-semibold uppercase tracking-[0.24em] text-slate-400;
   }
 
   .input {
-    @apply w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-200;
+    @apply w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-violet-300 focus:outline-none focus:ring-4 focus:ring-violet-100;
   }
 
   .button-primary {
-    @apply inline-flex items-center justify-center rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex items-center justify-center rounded-2xl bg-violet-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .button-secondary {
-    @apply inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 shadow-sm transition hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .subtle-card {
-    @apply rounded-2xl border border-gray-200 bg-white/80 shadow-sm;
+    @apply rounded-3xl border border-white/70 bg-white/80 shadow-lg shadow-slate-200/40 backdrop-blur;
   }
 }
