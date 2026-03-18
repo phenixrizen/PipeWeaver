@@ -1,0 +1,55 @@
+pipeline:
+  id: csv_http_to_json_cel
+  name: CSV HTTP to JSON with CEL
+  description: Use CEL expressions to combine multiple CSV fields into target JSON values.
+source:
+  type: http
+  format: csv
+  config:
+    samplePayload: |
+      first_name,last_name,nickname,amount,currency
+      Ada,Lovelace,,12.50,USD
+      Grace,Hopper,Amazing Grace,41.75,USD
+target:
+  type: stdout
+  format: json
+mapping:
+  fields:
+    - expression: 'record.first_name + " " + record.last_name'
+      to: customer.full_name
+    - expression: 'nickname != "" ? nickname : first_name'
+      to: customer.preferred_name
+    - expression: 'record.first_name + "-" + record.last_name + "-" + currency'
+      to: customer.synthetic_key
+    - from: amount
+      to: invoice.amount
+      transforms:
+        - type: to_float
+    - from: currency
+      to: invoice.currency
+targetSchema:
+  type: object
+  fields:
+    - name: customer
+      type: object
+      required: true
+      fields:
+        - name: full_name
+          type: string
+          required: true
+        - name: preferred_name
+          type: string
+          required: true
+        - name: synthetic_key
+          type: string
+          required: true
+    - name: invoice
+      type: object
+      required: true
+      fields:
+        - name: amount
+          type: number
+          required: true
+        - name: currency
+          type: string
+          required: true

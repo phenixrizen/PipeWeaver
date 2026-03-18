@@ -1,0 +1,10 @@
+<order>
+  <customer>
+    <id>500</id>
+    <name>Jane Doe</name>
+  </customer>
+  <invoice>
+    <amount>91.20</amount>
+    <currency>USD</currency>
+  </invoice>
+</order>

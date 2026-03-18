@@ -1,0 +1,16 @@
+# Go
+bin/
+.coverprofile
+*.test
+
+# Node
+web/node_modules/
+web/dist/
+web/coverage/
+
+# Generated / runtime
+.pipeweaver/
+*.log
+.DS_Store
+
+web/*.tsbuildinfo
