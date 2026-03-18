@@ -1,0 +1,12 @@
+<orders>
+  <order>
+    <id>9001</id>
+    <customer>Jane Doe</customer>
+    <total>120.50</total>
+  </order>
+  <order>
+    <id>9002</id>
+    <customer>John Roe</customer>
+    <total>77.10</total>
+  </order>
+</orders>

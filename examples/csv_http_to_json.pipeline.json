@@ -1,0 +1,33 @@
+{
+  "id": "csv_http_to_json_example",
+  "name": "CSV HTTP to JSON",
+  "description": "Transforms a CSV payload into structured JSON.",
+  "source": {
+    "type": "http",
+    "format": "csv",
+    "config": {
+      "samplePayload": "customer_id,full_name,amount\n1001, Alice Jones ,42.95\n1002,Bob Smith,13.50"
+    }
+  },
+  "target": {
+    "type": "stdout",
+    "format": "json"
+  },
+  "targetSchema": {
+    "name": "invoice-schema",
+    "fields": [
+      { "name": "customer", "path": "customer", "type": "object", "required": true },
+      { "name": "invoice", "path": "invoice", "type": "object", "required": true },
+      { "name": "amount", "path": "invoice.amount", "type": "number", "required": true }
+    ]
+  },
+  "mapping": {
+    "fields": [
+      { "from": "customer_id", "to": "customer.id", "transforms": [{ "type": "trim" }] },
+      { "from": "full_name", "to": "customer.name", "transforms": [{ "type": "trim" }] },
+      { "from": "amount", "to": "invoice.amount", "transforms": [{ "type": "to_float" }] },
+      { "to": "invoice.currency", "transforms": [{ "type": "default", "value": "USD" }] }
+    ]
+  },
+  "sampleInput": "customer_id,full_name,amount\n1001, Alice Jones ,42.95"
+}

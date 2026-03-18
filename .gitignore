@@ -1,0 +1,23 @@
+# Go build outputs
+bin/
+dist/
+*.out
+.coverage
+coverage.txt
+
+# Node artifacts
+web/node_modules/
+web/dist/
+web/coverage/
+
+# Environment files
+.env
+.env.*
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local data
+.data/

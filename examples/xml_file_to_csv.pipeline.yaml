@@ -1,0 +1,19 @@
+id: xml_file_to_csv_example
+name: XML file to CSV
+description: Converts a simple XML file into CSV output.
+source:
+  type: file
+  format: xml
+  config:
+    path: examples/orders.xml
+target:
+  type: stdout
+  format: csv
+mapping:
+  fields:
+    - from: order.id
+      to: order_id
+    - from: order.customer
+      to: customer_name
+    - from: order.total
+      to: total_amount
