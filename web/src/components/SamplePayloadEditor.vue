@@ -1,5 +1,24 @@
 <script setup lang="ts">
+import { computed } from "vue";
+import MonacoCodeEditor from "./MonacoCodeEditor.vue";
+
+const props = defineProps<{ format?: string }>();
 const model = defineModel<string>({ required: true });
+
+const language = computed(() => {
+  switch (props.format) {
+    case "json":
+      return "json";
+    case "xml":
+      return "xml";
+    case "csv":
+    case "tsv":
+    case "pipe":
+      return "plaintext";
+    default:
+      return "plaintext";
+  }
+});
 </script>
 
 <template>
@@ -18,6 +37,6 @@ const model = defineModel<string>({ required: true });
         Raw request body
       </span>
     </div>
-    <textarea v-model="model" class="input min-h-56 font-mono text-xs" />
+    <MonacoCodeEditor v-model="model" :language="language" height="260px" />
   </section>
 </template>
