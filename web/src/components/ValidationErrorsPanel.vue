@@ -6,7 +6,7 @@ defineProps<{ errors?: { path: string; message: string }[] }>();
   <section class="panel p-5">
     <div class="mb-4">
       <p class="panel-title">Validation errors</p>
-      <p class="mt-2 text-sm leading-6 text-gray-600">
+      <p class="mt-2 text-sm leading-6 text-slate-600">
         Schema validation and required mapping issues appear here.
       </p>
     </div>
@@ -14,7 +14,7 @@ defineProps<{ errors?: { path: string; message: string }[] }>();
       <div
         v-for="error in errors"
         :key="`${error.path}-${error.message}`"
-        class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+        class="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
       >
         <strong>{{ error.path }}</strong
         >: {{ error.message }}

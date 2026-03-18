@@ -8,7 +8,6 @@ import { usePipelineStore } from "../stores/pipelines";
 const store = usePipelineStore();
 const route = useRoute();
 
-// loadEditor chooses between a new draft and an existing pipeline based on the route parameter.
 const loadEditor = async () => {
   const id = route.params.id;
   if (typeof id === "string" && id.length > 0) {
@@ -27,7 +26,7 @@ onMounted(() => {
   <div>
     <PageHeader
       title="Pipeline editor"
-      description="Configure connectors, define mappings, preview output, and validate schema expectations from a single control center."
+      description="Design polished request-to-response flows, configure HTTP-ready endpoints, and map CSV data into structured output with drag-and-drop assistance."
     />
 
     <div

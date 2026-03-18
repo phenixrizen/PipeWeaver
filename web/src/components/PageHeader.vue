@@ -12,10 +12,10 @@ defineProps<{ title: string; description: string }>();
       >
         PipeWeaver workspace
       </p>
-      <h2 class="mt-3 text-3xl font-bold tracking-tight text-gray-900">
+      <h2 class="mt-3 text-3xl font-bold tracking-tight text-slate-900">
         {{ title }}
       </h2>
-      <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-600">
+      <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
         {{ description }}
       </p>
     </div>

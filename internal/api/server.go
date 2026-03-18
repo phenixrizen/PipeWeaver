@@ -38,6 +38,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/pipelines/", s.handlePipelineByID)
 	mux.HandleFunc("/api/schema/infer", s.handleInferSchema)
 	mux.HandleFunc("/api/mapping/preview", s.handlePreview)
+	mux.HandleFunc("/api/http/", s.handleHTTPPipeline)
 	return cors(mux)
 }
 
@@ -111,6 +112,46 @@ func (s *Server) handleTestPipeline(id string, w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
+func (s *Server) handleHTTPPipeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/http/")
+	definition, err := s.store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if strings.ToLower(definition.Source.Type) != "http" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("pipeline %q is not configured with an http source", id))
+		return
+	}
+
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	preview, err := s.executor.RunPreview(r.Context(), definition, payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if shouldReplyInline(definition.Target.Config) {
+		w.Header().Set("Content-Type", contentTypeForFormat(definition.Target.Format))
+		w.Header().Set("X-PipeWeaver-Pipeline", definition.Pipeline.ID)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(preview.EncodedOutput))
+		return
+	}
+
 	writeJSON(w, http.StatusOK, preview)
 }
 
@@ -196,6 +237,34 @@ func decodePipelineRequest(body io.Reader) (pipeline.Definition, error) {
 		return pipeline.Definition{}, err
 	}
 	return pipeline.Parse(payload)
+}
+
+func shouldReplyInline(config map[string]any) bool {
+	if config == nil {
+		return false
+	}
+	if responseMode, ok := config["responseMode"].(string); ok {
+		return strings.EqualFold(responseMode, "reply") || strings.EqualFold(responseMode, "inline")
+	}
+	if replyInline, ok := config["respondToSource"].(bool); ok {
+		return replyInline
+	}
+	return false
+}
+
+func contentTypeForFormat(format string) string {
+	switch strings.ToLower(format) {
+	case "json":
+		return "application/json"
+	case "xml":
+		return "application/xml"
+	case "csv":
+		return "text/csv"
+	case "tsv":
+		return "text/tab-separated-values"
+	default:
+		return "text/plain"
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

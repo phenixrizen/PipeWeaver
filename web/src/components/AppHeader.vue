@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
+import PipeWeaverLogo from "./PipeWeaverLogo.vue";
 
 defineProps<{ sidebarOpen: boolean }>();
 defineEmits<{ toggleSidebar: [] }>();
@@ -7,13 +8,13 @@ defineEmits<{ toggleSidebar: [] }>();
 
 <template>
   <header
-    class="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur"
+    class="sticky top-0 z-30 border-b border-white/70 bg-white/85 backdrop-blur-xl"
   >
     <div class="px-4 sm:px-6 lg:px-8">
-      <div class="flex h-16 items-center justify-between gap-4">
+      <div class="flex h-20 items-center justify-between gap-4">
         <div class="flex items-center gap-3">
           <button
-            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 text-gray-500 transition hover:bg-gray-100 lg:hidden"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100 lg:hidden"
             type="button"
             :aria-expanded="sidebarOpen"
             aria-controls="app-sidebar"
@@ -26,22 +27,12 @@ defineEmits<{ toggleSidebar: [] }>();
               <rect x="4" y="16" width="16" height="2" rx="1" />
             </svg>
           </button>
+
           <div>
-            <p
-              class="text-xs font-semibold uppercase tracking-[0.24em] text-violet-500"
-            >
-              PipeWeaver
+            <PipeWeaverLogo compact />
+            <p class="mt-2 hidden text-sm text-slate-500 sm:block">
+              Build, test, and expose transformation flows from one workspace.
             </p>
-            <div class="flex items-center gap-2">
-              <h1 class="text-sm font-semibold text-gray-900 sm:text-base">
-                Pipeline operations dashboard
-              </h1>
-              <span
-                class="hidden rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-600 sm:inline-flex"
-              >
-                Cruip-style UI refresh
-              </span>
-            </div>
           </div>
         </div>
 
