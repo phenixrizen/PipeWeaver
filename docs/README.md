@@ -51,7 +51,11 @@ PipeWeaver supports optional CEL expressions in field mappings when a target val
 
 The UI also validates CEL expressions in the browser with `@marcbachmann/cel-js` so authors can catch syntax or obvious evaluation issues before sending a preview request to the backend.
 
-See `examples/pipelines` for working samples.
+See `examples/pipelines` for working samples, including CSV → JSON, XML → CSV, JSON → TSV, TSV → JSON, and pipe-delimited → XML flows.
+
+### Seeding examples into the UI store
+
+The API server reads pipelines from `.pipeweaver/pipelines` by default. To make the bundled example definitions show up in the UI, start the server with `go run ./cmd/pipeweaver-api -seed-examples`. This copies any missing definitions from `examples/pipelines` into the active store root without overwriting existing saved pipelines. Use `-seed-source` to seed from a different directory, or set `PIPEWEAVER_STORE_ROOT` to target a different store location.
 
 ## How to add a new connector
 

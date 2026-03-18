@@ -16,13 +16,13 @@ const updateSchema = (event: Event) => {
   <section class="panel p-5">
     <div class="mb-4">
       <p class="panel-title">Target schema</p>
-      <p class="mt-1 text-sm text-slate-400">
+      <p class="mt-2 text-sm leading-6 text-gray-600">
         Keep schema definitions explicit for validation and future AI-assisted
         mapping.
       </p>
     </div>
     <textarea
-      class="input min-h-48 font-mono"
+      class="input min-h-48 font-mono text-xs"
       :value="JSON.stringify(model, null, 2)"
       @change="updateSchema"
     />

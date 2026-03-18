@@ -1,0 +1,31 @@
+pipeline:
+  id: pipe_http_to_xml
+  name: Pipe-delimited HTTP to XML
+  description: Turn a pipe-delimited HTTP sample payload into XML-ready event records.
+source:
+  type: http
+  format: pipe
+  config:
+    samplePayload: |
+      event_id|region|customer_name|amount
+      EVT-1|NA| Ada Lovelace |12.50
+      EVT-2|EU|Grace Hopper|41.75
+target:
+  type: stdout
+  format: xml
+mapping:
+  fields:
+    - from: event_id
+      to: event_id
+    - from: region
+      to: region
+      transforms:
+        - type: upper
+    - from: customer_name
+      to: customer_name
+      transforms:
+        - type: trim
+    - from: amount
+      to: amount
+      transforms:
+        - type: to_float

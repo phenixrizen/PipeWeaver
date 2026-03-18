@@ -14,7 +14,11 @@ it("emits preview when requested", async () => {
     },
   });
 
-  const buttons = wrapper.findAll("button");
-  await buttons[1].trigger("click");
+  const previewButton = wrapper
+    .findAll("button")
+    .find((button) => button.text().includes("Run preview"));
+
+  expect(previewButton).toBeTruthy();
+  await previewButton!.trigger("click");
   expect(wrapper.emitted("preview")).toBeTruthy();
 });

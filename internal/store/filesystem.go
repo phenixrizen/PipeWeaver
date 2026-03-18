@@ -1,10 +1,12 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/phenixrizen/PipeWeaver/internal/pipeline"
 )
@@ -35,6 +37,44 @@ func (s *FilesystemStore) Save(definition pipeline.Definition) error {
 	return os.WriteFile(path, payload, 0o644)
 }
 
+// SeedFromDir copies pipeline definitions from a source directory into the store.
+// Existing stored pipeline IDs are preserved so local edits are not overwritten.
+func (s *FilesystemStore) SeedFromDir(sourceRoot string) (int, error) {
+	entries, err := os.ReadDir(sourceRoot)
+	if err != nil {
+		return 0, fmt.Errorf("read seed source: %w", err)
+	}
+
+	seeded := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !isPipelineDefinitionFile(entry.Name()) {
+			continue
+		}
+
+		definition, err := pipeline.LoadFile(filepath.Join(sourceRoot, entry.Name()))
+		if err != nil {
+			return seeded, fmt.Errorf("load seed pipeline %q: %w", entry.Name(), err)
+		}
+		if definition.Pipeline.ID == "" {
+			return seeded, fmt.Errorf("seed pipeline %q is missing a pipeline id", entry.Name())
+		}
+
+		targetPath := filepath.Join(s.Root, definition.Pipeline.ID+".yaml")
+		if _, err := os.Stat(targetPath); err == nil {
+			continue
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return seeded, fmt.Errorf("check existing seeded pipeline %q: %w", definition.Pipeline.ID, err)
+		}
+
+		if err := s.Save(definition); err != nil {
+			return seeded, fmt.Errorf("save seeded pipeline %q: %w", definition.Pipeline.ID, err)
+		}
+		seeded++
+	}
+
+	return seeded, nil
+}
+
 // List returns all stored pipeline definitions sorted by ID.
 func (s *FilesystemStore) List() ([]pipeline.Definition, error) {
 	entries, err := os.ReadDir(s.Root)
@@ -59,4 +99,9 @@ func (s *FilesystemStore) List() ([]pipeline.Definition, error) {
 // Get loads a single stored pipeline by ID.
 func (s *FilesystemStore) Get(id string) (pipeline.Definition, error) {
 	return pipeline.LoadFile(filepath.Join(s.Root, id+".yaml"))
+}
+
+func isPipelineDefinitionFile(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	return ext == ".yaml" || ext == ".yml" || ext == ".json"
 }

@@ -1,0 +1,24 @@
+pipeline:
+  id: json_file_to_tsv
+  name: JSON file to TSV
+  description: Flatten nested customer invoice records from JSON into TSV rows.
+source:
+  type: file
+  format: json
+  config:
+    path: examples/inputs/customers.json
+target:
+  type: stdout
+  format: tsv
+mapping:
+  fields:
+    - from: customer_id
+      to: customer_id
+    - expression: 'record.profile.first_name + " " + record.profile.last_name'
+      to: full_name
+    - from: invoice.amount
+      to: amount
+      transforms:
+        - type: to_float
+    - from: invoice.currency
+      to: currency

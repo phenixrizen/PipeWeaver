@@ -27,12 +27,12 @@ onMounted(() => {
   <div>
     <PageHeader
       title="Pipeline editor"
-      description="Configure connectors, define mappings, test payloads, and inspect transformed output in one place."
+      description="Configure connectors, define mappings, preview output, and validate schema expectations from a single control center."
     />
 
     <div
       v-if="store.error"
-      class="mb-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"
+      class="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 shadow-sm"
     >
       {{ store.error }}
     </div>
