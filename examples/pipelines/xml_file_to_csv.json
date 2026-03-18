@@ -1,0 +1,41 @@
+{
+  "pipeline": {
+    "id": "xml_file_to_csv",
+    "name": "XML file to CSV",
+    "description": "Transform an XML order document into a CSV row."
+  },
+  "source": {
+    "type": "file",
+    "format": "xml",
+    "config": {
+      "path": "examples/inputs/order.xml"
+    }
+  },
+  "target": {
+    "type": "file",
+    "format": "csv",
+    "config": {
+      "path": ".pipeweaver/output/orders.csv"
+    }
+  },
+  "mapping": {
+    "fields": [
+      {
+        "from": "customer.id",
+        "to": "customer_id"
+      },
+      {
+        "from": "customer.name",
+        "to": "customer_name"
+      },
+      {
+        "from": "invoice.amount",
+        "to": "amount"
+      },
+      {
+        "from": "invoice.currency",
+        "to": "currency"
+      }
+    ]
+  }
+}
