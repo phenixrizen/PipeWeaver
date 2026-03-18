@@ -26,7 +26,7 @@ const addTransform = () => {
     <div
       v-for="(transform, index) in model"
       :key="index"
-      class="rounded-xl border border-slate-700 bg-slate-950/50 p-3"
+      class="rounded-xl border border-gray-200 bg-gray-50 p-3"
     >
       <div class="grid gap-2 md:grid-cols-[1fr,1fr,auto]">
         <select v-model="transform.type" class="input">

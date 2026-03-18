@@ -1,32 +1,45 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* The base layer establishes the dark, modern SaaS-like visual direction for the MVP. */
 @layer base {
+  :root {
+    font-family: "Inter", sans-serif;
+  }
+
   body {
-    @apply min-h-screen bg-slate-950 text-slate-100 antialiased;
+    @apply min-h-screen bg-gray-100 text-gray-900 antialiased;
+  }
+
+  #app {
+    @apply min-h-screen;
   }
 }
 
 @layer components {
   .panel {
-    @apply rounded-2xl border border-slate-800 bg-slate-900/80 shadow-panel backdrop-blur;
+    @apply rounded-2xl border border-gray-200 bg-white shadow-sm;
   }
 
   .panel-title {
-    @apply text-sm font-semibold uppercase tracking-[0.2em] text-slate-400;
+    @apply text-xs font-semibold uppercase tracking-[0.24em] text-gray-400;
   }
 
   .input {
-    @apply w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:ring-cyan-400;
+    @apply w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-200;
   }
 
   .button-primary {
-    @apply inline-flex items-center justify-center rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400;
+    @apply inline-flex items-center justify-center rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .button-secondary {
-    @apply inline-flex items-center justify-center rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500 hover:bg-slate-800;
+    @apply inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 shadow-sm transition hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .subtle-card {
+    @apply rounded-2xl border border-gray-200 bg-white/80 shadow-sm;
   }
 }

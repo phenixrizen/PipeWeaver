@@ -10,29 +10,42 @@ defineProps<{ pipelines: PipelineDefinition[] }>();
       v-for="pipeline in pipelines"
       :key="pipeline.pipeline.id"
       :to="`/pipelines/${pipeline.pipeline.id}`"
-      class="panel block p-5 transition hover:-translate-y-0.5 hover:border-cyan-400/40"
+      class="panel group block p-5 transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md"
     >
       <div class="flex items-start justify-between gap-4">
         <div>
-          <h3 class="text-lg font-semibold text-white">
+          <p
+            class="text-xs font-semibold uppercase tracking-[0.24em] text-gray-400"
+          >
+            {{ pipeline.pipeline.id }}
+          </p>
+          <h3
+            class="mt-2 text-xl font-semibold text-gray-900 transition group-hover:text-violet-600"
+          >
             {{ pipeline.pipeline.name }}
           </h3>
-          <p class="mt-2 text-sm text-slate-400">
+          <p class="mt-2 text-sm leading-6 text-gray-600">
             {{ pipeline.pipeline.description || "No description yet." }}
           </p>
         </div>
         <span
-          class="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300"
-          >{{ pipeline.pipeline.id }}</span
+          class="rounded-full bg-violet-50 px-3 py-1 text-xs font-medium text-violet-600"
         >
+          Open
+        </span>
       </div>
-      <div class="mt-4 flex flex-wrap gap-2 text-xs text-slate-300">
-        <span class="rounded-full bg-slate-800 px-3 py-1"
-          >{{ pipeline.source.type }} → {{ pipeline.target.type }}</span
+
+      <div class="mt-5 flex flex-wrap gap-2 text-xs font-medium">
+        <span
+          class="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-gray-600"
         >
-        <span class="rounded-full bg-slate-800 px-3 py-1"
-          >{{ pipeline.source.format }} → {{ pipeline.target.format }}</span
+          {{ pipeline.source.type }} → {{ pipeline.target.type }}
+        </span>
+        <span
+          class="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-gray-600"
         >
+          {{ pipeline.source.format }} → {{ pipeline.target.format }}
+        </span>
       </div>
     </RouterLink>
   </div>

@@ -1,0 +1,3 @@
+shipment_id	warehouse	status	priority
+S-100	East	ready	high
+S-101	West	packed	medium

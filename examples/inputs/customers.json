@@ -1,0 +1,24 @@
+[
+  {
+    "customer_id": "1001",
+    "profile": {
+      "first_name": "Ada",
+      "last_name": "Lovelace"
+    },
+    "invoice": {
+      "amount": "12.50",
+      "currency": "USD"
+    }
+  },
+  {
+    "customer_id": "1002",
+    "profile": {
+      "first_name": "Grace",
+      "last_name": "Hopper"
+    },
+    "invoice": {
+      "amount": "41.75",
+      "currency": "USD"
+    }
+  }
+]

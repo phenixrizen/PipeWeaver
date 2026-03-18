@@ -28,10 +28,10 @@ const expressionStates = computed(() =>
 
 <template>
   <section class="panel p-5">
-    <div class="mb-4 flex items-center justify-between">
+    <div class="mb-4 flex items-center justify-between gap-3">
       <div>
         <p class="panel-title">Field mappings</p>
-        <p class="mt-1 text-sm text-slate-400">
+        <p class="mt-2 text-sm leading-6 text-gray-600">
           Map source fields into target paths with explicit transforms.
         </p>
       </div>
@@ -44,7 +44,7 @@ const expressionStates = computed(() =>
       <div
         v-for="(row, index) in model"
         :key="index"
-        class="rounded-2xl border border-slate-800 bg-slate-950/60 p-4"
+        class="rounded-2xl border border-gray-200 bg-gray-50 p-4"
       >
         <div class="grid gap-3 lg:grid-cols-[1fr,1fr]">
           <input
@@ -67,21 +67,21 @@ const expressionStates = computed(() =>
               v-if="row.expression"
               :class="
                 expressionStates[index]?.valid
-                  ? 'text-emerald-300'
-                  : 'text-rose-300'
+                  ? 'text-emerald-600'
+                  : 'text-red-600'
               "
-              class="text-xs"
+              class="text-xs font-medium"
             >
               {{ expressionStates[index]?.message }}
             </p>
           </div>
           <label
-            class="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-300 lg:w-max"
+            class="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 lg:w-max"
           >
             <input
               v-model="row.required"
               type="checkbox"
-              class="rounded border-slate-600 bg-slate-900 text-cyan-400"
+              class="h-4 w-4 rounded border-gray-300 text-violet-500 focus:ring-violet-200"
             />
             Required
           </label>

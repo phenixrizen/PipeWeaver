@@ -4,7 +4,7 @@ const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 </script>
 
 <template>
-  <label class="space-y-2 text-sm text-slate-300">
+  <label class="space-y-2 text-sm font-medium text-gray-700">
     <span>{{ label }}</span>
     <select
       class="input"

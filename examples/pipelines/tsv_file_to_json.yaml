@@ -1,0 +1,48 @@
+pipeline:
+  id: tsv_file_to_json
+  name: TSV file to JSON
+  description: Convert tab-delimited shipment exports into nested JSON with normalized casing.
+source:
+  type: file
+  format: tsv
+  config:
+    path: examples/inputs/shipments.tsv
+target:
+  type: stdout
+  format: json
+mapping:
+  fields:
+    - from: shipment_id
+      to: shipment.id
+    - from: warehouse
+      to: shipment.location
+      transforms:
+        - type: lower
+    - from: status
+      to: shipment.status
+      transforms:
+        - type: upper
+    - from: priority
+      to: shipment.priority
+      transforms:
+        - type: default
+          value: standard
+targetSchema:
+  type: object
+  fields:
+    - name: shipment
+      type: object
+      required: true
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: location
+          type: string
+          required: true
+        - name: status
+          type: string
+          required: true
+        - name: priority
+          type: string
+          required: true

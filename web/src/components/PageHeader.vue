@@ -4,14 +4,20 @@ defineProps<{ title: string; description: string }>();
 
 <template>
   <div
-    class="mb-8 flex flex-col gap-3 md:flex-row md:items-end md:justify-between"
+    class="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
   >
     <div>
-      <p class="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-400">
-        PipeWeaver MVP
+      <p
+        class="text-xs font-semibold uppercase tracking-[0.28em] text-violet-500"
+      >
+        PipeWeaver workspace
       </p>
-      <h2 class="mt-2 text-3xl font-semibold text-white">{{ title }}</h2>
-      <p class="mt-2 max-w-3xl text-sm text-slate-400">{{ description }}</p>
+      <h2 class="mt-3 text-3xl font-bold tracking-tight text-gray-900">
+        {{ title }}
+      </h2>
+      <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-600">
+        {{ description }}
+      </p>
     </div>
     <slot />
   </div>

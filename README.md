@@ -21,7 +21,7 @@ PipeWeaver helps teams define pipelines that:
 - Canonical record path helpers using dot notation.
 - Mapping engine with trim, case conversion, type conversion, default values, concat, CEL expressions for multi-field reads, and conditional/date scaffolds.
 - Schema inference and JSON Schema aware validation.
-- Example pipelines for CSV → JSON and XML → CSV.
+- Example pipelines for CSV → JSON, XML → CSV, JSON → TSV, TSV → JSON, and pipe-delimited → XML.
 - CLI runner for local execution and API server for UI-driven workflow testing.
 
 ## Repository layout
@@ -50,7 +50,10 @@ PipeWeaver helps teams define pipelines that:
 go mod tidy
 go test ./...
 go run ./cmd/pipeweaver-api
+go run ./cmd/pipeweaver-api -seed-examples
 ```
+
+Run the API with `-seed-examples` to copy the bundled files from `examples/pipelines` into the active store root so they appear in the UI. Use `-seed-source` to point at a different directory, and `PIPEWEAVER_STORE_ROOT` if you want to seed a non-default store location.
 
 ### Frontend
 
@@ -73,6 +76,9 @@ make build
 - `examples/pipelines/csv_http_to_json.yaml`
 - `examples/pipelines/xml_file_to_csv.json`
 - `examples/pipelines/csv_http_to_json_cel.yaml`
+- `examples/pipelines/json_file_to_tsv.yaml`
+- `examples/pipelines/tsv_file_to_json.yaml`
+- `examples/pipelines/pipe_http_to_xml.yaml`
 
 ## Documentation
 
