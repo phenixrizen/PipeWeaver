@@ -49,6 +49,8 @@ Pipelines can be expressed in YAML or JSON. They define:
 
 PipeWeaver supports optional CEL expressions in field mappings when a target value needs to combine or branch across multiple source fields. Expressions can reference the full record via `record` and top-level identifier-safe fields directly. For example, `record.first_name + " " + record.last_name` or `amount != '' ? amount : '0'`.
 
+The UI also validates CEL expressions in the browser with `@marcbachmann/cel-js` so authors can catch syntax or obvious evaluation issues before sending a preview request to the backend.
+
 See `examples/pipelines` for working samples.
 
 ## How to add a new connector

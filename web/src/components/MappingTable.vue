@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import TransformEditor from "./TransformEditor.vue";
+import { validateExpression } from "../lib/cel";
 import type { FieldMapping } from "../types/pipeline";
 
+const props = defineProps<{ sourceFormat: string; samplePayload: string }>();
 const model = defineModel<FieldMapping[]>({ required: true });
 
 // addRow grows the mapping table incrementally without imposing a more complex schema graph UI in v1.
@@ -14,6 +17,13 @@ const addRow = () => {
     transforms: [],
   });
 };
+
+// expressionStates keeps the browser-side CEL validation aligned with the current sample payload and source format.
+const expressionStates = computed(() =>
+  model.value.map((row) =>
+    validateExpression(row.expression, props.samplePayload, props.sourceFormat),
+  ),
+);
 </script>
 
 <template>
@@ -47,11 +57,24 @@ const addRow = () => {
             class="input"
             placeholder="target field/path"
           />
-          <input
-            v-model="row.expression"
-            class="input lg:col-span-2"
-            placeholder="optional CEL expression, e.g. record.first_name + ' ' + record.last_name"
-          />
+          <div class="space-y-2 lg:col-span-2">
+            <input
+              v-model="row.expression"
+              class="input"
+              placeholder="optional CEL expression, e.g. record.first_name + ' ' + record.last_name"
+            />
+            <p
+              v-if="row.expression"
+              :class="
+                expressionStates[index]?.valid
+                  ? 'text-emerald-300'
+                  : 'text-rose-300'
+              "
+              class="text-xs"
+            >
+              {{ expressionStates[index]?.message }}
+            </p>
+          </div>
           <label
             class="flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-300 lg:w-max"
           >

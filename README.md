@@ -72,6 +72,7 @@ make build
 
 - `examples/pipelines/csv_http_to_json.yaml`
 - `examples/pipelines/xml_file_to_csv.json`
+- `examples/pipelines/csv_http_to_json_cel.yaml`
 
 ## Documentation
 

@@ -74,7 +74,11 @@ const formatOptions = ["json", "csv", "tsv", "pipe", "xml"];
     <div class="grid gap-6 xl:grid-cols-[1.4fr,1fr]">
       <div class="space-y-6">
         <SamplePayloadEditor v-model="samplePayload" />
-        <MappingTable v-model="pipeline.mapping.fields" />
+        <MappingTable
+          v-model="pipeline.mapping.fields"
+          :source-format="pipeline.source.format"
+          :sample-payload="samplePayload"
+        />
       </div>
       <div class="space-y-6">
         <SchemaEditor v-model="pipeline.targetSchema" />
