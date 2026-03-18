@@ -11,12 +11,14 @@ export const router = createRouter({
       path: "/pipelines/new",
       name: "pipeline-new",
       component: PipelineEditorView,
+      meta: { wideContent: true },
     },
     {
       path: "/pipelines/:id",
       name: "pipeline-edit",
       component: PipelineEditorView,
       props: true,
+      meta: { wideContent: true },
     },
   ],
 });
