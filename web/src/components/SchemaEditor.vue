@@ -1,15 +1,19 @@
 <script setup lang="ts">
+import { computed } from "vue";
+import MonacoCodeEditor from "./MonacoCodeEditor.vue";
 import type { SchemaDefinition } from "../types/pipeline";
 
 const model = defineModel<SchemaDefinition | undefined>({ required: true });
 
-// updateSchema keeps the text editor flexible while still normalizing empty input into a valid schema object.
-const updateSchema = (event: Event) => {
-  const value = (event.target as HTMLTextAreaElement).value;
-  model.value = JSON.parse(
-    value || '{"type":"object","fields":[]}',
-  ) as SchemaDefinition;
-};
+const serializedSchema = computed({
+  get: () =>
+    JSON.stringify(model.value ?? { type: "object", fields: [] }, null, 2),
+  set: (value: string) => {
+    model.value = JSON.parse(
+      value || '{"type":"object","fields":[]}',
+    ) as SchemaDefinition;
+  },
+});
 </script>
 
 <template>
@@ -21,10 +25,10 @@ const updateSchema = (event: Event) => {
         mapping.
       </p>
     </div>
-    <textarea
-      class="input min-h-48 font-mono text-xs"
-      :value="JSON.stringify(model, null, 2)"
-      @change="updateSchema"
+    <MonacoCodeEditor
+      v-model="serializedSchema"
+      language="json"
+      height="320px"
     />
   </section>
 </template>

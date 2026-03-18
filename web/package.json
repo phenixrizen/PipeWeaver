@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@marcbachmann/cel-js": "^7.5.3",
+    "@mlc-ai/web-llm": "^0.2.82",
+    "monaco-editor": "^0.55.1",
     "pinia": "^2.1.7",
     "vue": "^3.4.38",
     "vue-router": "^4.4.3"

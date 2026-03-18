@@ -3,6 +3,7 @@ import ConnectorConfigCard from "./ConnectorConfigCard.vue";
 import HttpEndpointPanel from "./HttpEndpointPanel.vue";
 import MappingTable from "./MappingTable.vue";
 import OutputPreviewPanel from "./OutputPreviewPanel.vue";
+import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
 import SchemaEditor from "./SchemaEditor.vue";
 import ValidationErrorsPanel from "./ValidationErrorsPanel.vue";
@@ -108,7 +109,10 @@ const formatOptions = ["json", "csv", "tsv", "pipe", "xml"];
 
     <div class="grid gap-6 xl:grid-cols-[1.4fr,1fr]">
       <div class="space-y-6">
-        <SamplePayloadEditor v-model="samplePayload" />
+        <SamplePayloadEditor
+          v-model="samplePayload"
+          :format="pipeline.source.format"
+        />
         <MappingTable
           v-model="pipeline.mapping.fields"
           :source-format="pipeline.source.format"
@@ -117,6 +121,10 @@ const formatOptions = ["json", "csv", "tsv", "pipe", "xml"];
         />
       </div>
       <div class="space-y-6">
+        <PipelineAiAssistant
+          v-model:pipeline="pipeline"
+          :sample-payload="samplePayload"
+        />
         <SchemaEditor v-model="pipeline.targetSchema" />
         <OutputPreviewPanel :preview="preview" />
         <ValidationErrorsPanel :errors="preview?.validationErrors" />

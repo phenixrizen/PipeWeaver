@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { watch } from "vue";
 import { useRoute } from "vue-router";
 import PageHeader from "../components/PageHeader.vue";
 import PipelineEditorForm from "../components/PipelineEditorForm.vue";
@@ -17,9 +17,13 @@ const loadEditor = async () => {
   store.createDraft();
 };
 
-onMounted(() => {
-  void loadEditor();
-});
+watch(
+  () => route.params.id,
+  () => {
+    void loadEditor();
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
