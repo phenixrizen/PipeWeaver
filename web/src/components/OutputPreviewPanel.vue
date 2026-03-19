@@ -1,7 +1,24 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { PreviewResult } from "../types/pipeline";
 
-defineProps<{ preview?: PreviewResult }>();
+const props = defineProps<{ preview?: PreviewResult }>();
+
+const formattedDuration = computed(() => {
+  if (!props.preview) {
+    return "";
+  }
+
+  if (props.preview.durationMs < 1) {
+    return "<1 ms";
+  }
+
+  if (props.preview.durationMs < 1000) {
+    return `${Math.round(props.preview.durationMs)} ms`;
+  }
+
+  return `${(props.preview.durationMs / 1000).toFixed(2)} s`;
+});
 </script>
 
 <template>
@@ -17,7 +34,7 @@ defineProps<{ preview?: PreviewResult }>();
         v-if="preview"
         class="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-600"
       >
-        {{ preview.durationMs }} ms
+        Last run {{ formattedDuration }}
       </span>
     </div>
     <pre

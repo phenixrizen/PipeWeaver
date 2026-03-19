@@ -14,6 +14,7 @@ const buildWrapper = () =>
       samplePayload: defaultSamplePayload,
       sampleOutput: blankSampleOutput,
       loading: false,
+      isSaved: false,
       preview: {
         inputRecords: [],
         outputRecords: [],
@@ -71,6 +72,7 @@ it("updates the source format when the sample payload editor detects one", async
       samplePayload: defaultSamplePayload,
       sampleOutput: blankSampleOutput,
       loading: false,
+      isSaved: false,
       "onUpdate:modelValue": () => undefined,
       "onUpdate:samplePayload": () => undefined,
       "onUpdate:sampleOutput": () => undefined,

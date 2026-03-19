@@ -9,9 +9,11 @@ import {
   isStructuredAiMode,
   normalizeStructuredAiResponseText,
   parseAiResponse,
+  structuredAiResponseSchema,
   type AiDraftMode,
   type AiDraftResponse,
 } from "../lib/ai";
+import { loadWebLLM } from "../lib/webllm";
 import type { PipelineDefinition } from "../types/pipeline";
 
 const pipeline = defineModel<PipelineDefinition>("pipeline", {
@@ -64,6 +66,9 @@ const progressStep = ref("Idle");
 const progressText = ref("");
 const errorMessage = ref("");
 const isModelReady = ref(false);
+const browserCacheStatus = ref<"checking" | "cached" | "missing" | "unavailable">(
+  "checking",
+);
 const isBusy = ref(false);
 const cancelRequested = ref(false);
 const parsedResponse = ref<AiDraftResponse | null>(null);
@@ -71,6 +76,7 @@ const parsedResponse = ref<AiDraftResponse | null>(null);
 const elapsedSeconds = ref(0);
 
 let elapsedTimer: number | undefined;
+let modelCacheStatusRequestId = 0;
 
 let engine:
   | {
@@ -84,6 +90,10 @@ let engine:
               temperature: number;
               max_tokens: number;
               stream?: boolean;
+              response_format?: {
+                type: "json_object";
+                schema: string;
+              };
             }) => Promise<
               | {
                   choices: { message: { content?: string | null } }[];
@@ -105,10 +115,26 @@ const canUseWebGpu = computed(
   () => typeof navigator !== "undefined" && "gpu" in navigator,
 );
 const isStructuredMode = computed(() => isStructuredAiMode(selectedMode.value));
+const selectedModelOption = computed(
+  () => aiModelOptions.find((option) => option.id === selectedModel.value) ?? aiModelOptions[0],
+);
 
 const elapsedLabel = computed(() =>
   elapsedSeconds.value > 0 ? `${elapsedSeconds.value}s` : "Not running",
 );
+
+const browserCacheStatusLabel = computed(() => {
+  switch (browserCacheStatus.value) {
+    case "cached":
+      return "Cached in browser";
+    case "missing":
+      return "Not cached yet";
+    case "unavailable":
+      return "Cache status unavailable";
+    default:
+      return "Checking browser cache";
+  }
+});
 
 const responseEditorLabel = computed(() =>
   isStructuredMode.value ? "AI JSON response" : "AI explanation",
@@ -217,10 +243,58 @@ const summarizeExplainResponse = (raw: string) => {
   return normalized ?? "Explanation ready.";
 };
 
+const refreshModelCacheStatus = async () => {
+  const requestId = ++modelCacheStatusRequestId;
+  browserCacheStatus.value = "checking";
+
+  try {
+    const webllm = await loadWebLLM();
+    const cached = await webllm.hasModelInCache(selectedModel.value);
+
+    if (requestId !== modelCacheStatusRequestId) {
+      return;
+    }
+
+    browserCacheStatus.value = cached ? "cached" : "missing";
+  } catch {
+    if (requestId !== modelCacheStatusRequestId) {
+      return;
+    }
+
+    browserCacheStatus.value = "unavailable";
+  }
+};
+
 watch(selectedMode, (mode) => {
   instructionText.value = defaultAiInstruction(mode, pipeline.value);
   resetResponse();
 });
+
+watch(
+  selectedModel,
+  (modelId) => {
+    isModelReady.value = engine?.modelId === modelId;
+
+    if (!isBusy.value) {
+      if (isModelReady.value) {
+        updateProgress(
+          "Ready",
+          "Model already loaded",
+          "Using the model cached in this browser session.",
+        );
+      } else {
+        updateProgress(
+          "Idle",
+          "Model not loaded",
+          "Load the selected model or generate a draft to let PipeWeaver load it automatically.",
+        );
+      }
+    }
+
+    void refreshModelCacheStatus();
+  },
+  { immediate: true },
+);
 
 watch(
   () => pipeline.value.target.format,
@@ -262,7 +336,7 @@ const loadModel = async () => {
   );
 
   try {
-    const webllm = await import("@mlc-ai/web-llm");
+    const webllm = await loadWebLLM();
     const instance = await webllm.CreateMLCEngine(selectedModel.value, {
       initProgressCallback(progress) {
         progressStep.value = "Loading model artifacts";
@@ -275,6 +349,7 @@ const loadModel = async () => {
 
     engine = { modelId: selectedModel.value, instance };
     isModelReady.value = true;
+    browserCacheStatus.value = "cached";
     updateProgress(
       "Ready",
       "Model ready",
@@ -354,7 +429,7 @@ const generateDraft = async () => {
         {
           role: "system",
           content: isStructuredMode.value
-            ? "You are PipeWeaver Studio AI. Produce practical mapping drafts for ETL operators. Return exactly one JSON object and do not include markdown fences or commentary."
+            ? "You are PipeWeaver Studio AI. Produce practical mapping drafts for ETL operators. Return exactly one JSON object that follows the provided schema. Do not include markdown fences or commentary."
             : "You are PipeWeaver Studio AI. Explain ETL pipelines for operators in concise markdown. Do not return JSON unless the user explicitly asks for it.",
         },
         {
@@ -365,6 +440,14 @@ const generateDraft = async () => {
       max_tokens: normalizedMaxTokens.value,
       stream: true,
       temperature: 0.2,
+      ...(isStructuredMode.value
+        ? {
+            response_format: {
+              type: "json_object" as const,
+              schema: structuredAiResponseSchema,
+            },
+          }
+        : {}),
     });
 
     responseText.value = "";
@@ -455,10 +538,16 @@ const generateDraft = async () => {
     updateProgress(
       "Generation failed",
       "Generation failed",
-      "The local model did not return a usable draft.",
+      isStructuredMode.value
+        ? "The local model could not initialize or satisfy the schema-constrained JSON response."
+        : "The local model did not return a usable explanation.",
     );
     errorMessage.value =
-      error instanceof Error ? error.message : "AI generation failed.";
+      error instanceof Error
+        ? isStructuredMode.value
+          ? `Structured AI generation failed: ${error.message}`
+          : error.message
+        : "AI generation failed.";
   } finally {
     stopElapsedTimer();
     isBusy.value = false;
@@ -542,19 +631,32 @@ const applyAll = () => {
     <div class="mt-5 grid gap-4 lg:grid-cols-[1fr,1fr,0.8fr,auto]">
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Local model</span>
-        <select v-model="selectedModel" class="input">
+        <select
+          v-model="selectedModel"
+          data-testid="ai-model-select"
+          class="input"
+        >
           <option
             v-for="option in aiModelOptions"
             :key="option.id"
             :value="option.id"
           >
-            {{ option.label }}
+            {{ option.dropdownLabel }}
           </option>
         </select>
         <p class="text-xs leading-5 text-slate-500">
-          {{
-            aiModelOptions.find((option) => option.id === selectedModel)?.note
-          }}
+          {{ selectedModelOption.note }}
+        </p>
+        <p class="text-xs leading-5 text-slate-500">
+          {{ selectedModelOption.sizeLabel }} model class with
+          {{ selectedModelOption.vramLabel }}.
+        </p>
+        <p
+          data-testid="ai-model-cache-status"
+          class="text-xs leading-5 text-slate-500"
+        >
+          Browser cache: {{ browserCacheStatusLabel }}. First load downloads the
+          model. Later loads reuse browser cache when available.
         </p>
       </label>
 

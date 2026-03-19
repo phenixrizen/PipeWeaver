@@ -18,15 +18,15 @@ defineProps<{ currentPipelineTitle?: string }>();
               Build, test, and expose transformation flows from one workspace.
             </p>
           </div>
+        </div>
+
+        <div class="flex min-w-0 items-center gap-2 sm:gap-3">
           <p
             v-if="currentPipelineTitle"
-            class="hidden max-w-64 truncate text-sm font-semibold text-slate-700 lg:block"
+            class="hidden max-w-72 truncate rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 lg:block"
           >
             {{ currentPipelineTitle }}
           </p>
-        </div>
-
-        <div class="flex items-center gap-2 sm:gap-3">
           <RouterLink class="button-secondary hidden sm:inline-flex" to="/">
             Browse pipelines
           </RouterLink>

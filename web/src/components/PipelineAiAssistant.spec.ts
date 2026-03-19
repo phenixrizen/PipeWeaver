@@ -2,16 +2,31 @@ import { defineComponent } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import PipelineAiAssistant from "./PipelineAiAssistant.vue";
+import { structuredAiResponseSchema } from "../lib/ai";
 import { defaultPipeline, defaultSamplePayload } from "../lib/defaults";
 
-const { createCompletionSpy, createEngineSpy, interruptGenerateSpy } = vi.hoisted(() => ({
+const {
+  createCompletionSpy,
+  createEngineSpy,
+  hasModelInCacheSpy,
+  interruptGenerateSpy,
+} = vi.hoisted(() => ({
   createCompletionSpy: vi.fn(),
   createEngineSpy: vi.fn(),
+  hasModelInCacheSpy: vi.fn(),
   interruptGenerateSpy: vi.fn(),
 }));
 
 vi.mock("@mlc-ai/web-llm", () => ({
   CreateMLCEngine: createEngineSpy,
+  hasModelInCache: hasModelInCacheSpy,
+}));
+
+vi.mock("../lib/webllm", () => ({
+  loadWebLLM: vi.fn(async () => ({
+    CreateMLCEngine: createEngineSpy,
+    hasModelInCache: hasModelInCacheSpy,
+  })),
 }));
 
 const MonacoStub = defineComponent({
@@ -86,10 +101,12 @@ const controlledAbortStream = (
 beforeEach(() => {
   createCompletionSpy.mockReset();
   createEngineSpy.mockReset();
+  hasModelInCacheSpy.mockReset();
   interruptGenerateSpy.mockReset();
   createCompletionSpy.mockResolvedValue(
     streamFromChunks(['{"summary":"Ready","mappingFields":[]}']),
   );
+  hasModelInCacheSpy.mockResolvedValue(true);
   createEngineSpy.mockResolvedValue({
     interruptGenerate: interruptGenerateSpy,
     chat: {
@@ -107,7 +124,33 @@ beforeEach(() => {
 afterEach(() => {
   createCompletionSpy.mockReset();
   createEngineSpy.mockReset();
+  hasModelInCacheSpy.mockReset();
   interruptGenerateSpy.mockReset();
+});
+
+it("shows model size metadata and browser cache status", async () => {
+  const pipeline = defaultPipeline();
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await flushPromises();
+
+  const modelOptions = wrapper.get('[data-testid="ai-model-select"]').findAll("option");
+  expect(modelOptions[0].text()).toContain("Llama 3.1 · 8B · ~5.0 GB VRAM");
+  expect(wrapper.get('[data-testid="ai-model-cache-status"]').text()).toContain(
+    "Cached in browser",
+  );
 });
 
 it("passes the configured max_tokens value into local generation", async () => {
@@ -136,6 +179,10 @@ it("passes the configured max_tokens value into local generation", async () => {
     expect.objectContaining({
       max_tokens: 2048,
       stream: true,
+      response_format: {
+        type: "json_object",
+        schema: structuredAiResponseSchema,
+      },
     }),
   );
 });
@@ -251,6 +298,11 @@ it("renders explain mode output as markdown instead of requiring JSON", async ()
   );
   expect(wrapper.text()).toContain("AI explanation");
   expect(wrapper.text()).not.toContain("Apply all");
+  expect(createCompletionSpy).toHaveBeenCalledWith(
+    expect.not.objectContaining({
+      response_format: expect.anything(),
+    }),
+  );
 });
 
 it("auto-applies structured wizard drafts while keeping a sample-locked target schema", async () => {

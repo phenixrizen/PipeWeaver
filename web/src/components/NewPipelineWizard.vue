@@ -175,11 +175,20 @@ const handleIdInput = (event: Event) => {
 };
 
 const handleDetectedSourceFormat = (format: string) => {
+  if (!format) {
+    return;
+  }
+
   pipeline.value.source.format = format;
 };
 
 const handleDetectedTargetFormat = (format: string) => {
+  if (!format) {
+    return;
+  }
+
   detectedTargetFormat.value = format;
+  pipeline.value.target.format = format;
 };
 
 const resetAiSummary = () => {
@@ -478,7 +487,7 @@ const completeWizard = () => {
           v-if="targetFormatMismatch"
           class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
         >
-          The dropped sample output looks like {{ detectedTargetFormat }}, but the selected target format is {{ pipeline.target.format }}. The wizard will keep the selected target format as the source of truth.
+          The dropped sample output looks like {{ detectedTargetFormat }}, but the target format is currently set to {{ pipeline.target.format }}. PipeWeaver will use the target format you selected most recently.
         </div>
       </div>
 

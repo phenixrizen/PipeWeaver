@@ -6,7 +6,6 @@ import { usePipelineStore } from "../stores/pipelines";
 
 const route = useRoute();
 const store = usePipelineStore();
-const isWideContent = computed(() => route.meta.wideContent === true);
 const currentPipelineTitle = computed(() => {
   if (!["pipeline-new", "pipeline-edit"].includes(String(route.name ?? ""))) {
     return "";
@@ -30,8 +29,7 @@ const currentPipelineTitle = computed(() => {
     <AppHeader :current-pipeline-title="currentPipelineTitle" />
     <main class="grow">
       <div
-        class="mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
-        :class="isWideContent ? 'max-w-none md:w-[90%]' : 'max-w-[1440px]'"
+        class="mx-auto w-full px-4 py-6 sm:px-6 md:w-[95%] lg:px-8 lg:py-8"
       >
         <slot />
       </div>

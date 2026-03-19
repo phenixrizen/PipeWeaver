@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { ConnectorConfig } from "../types/pipeline";
 
 const model = defineModel<ConnectorConfig>({ required: true });
@@ -12,6 +12,7 @@ const props = defineProps<{
 const isTargetCard = computed(() =>
   props.title.toLowerCase().includes("target"),
 );
+const showConfigJson = ref(false);
 
 const ensureConfig = () => {
   if (!model.value.config || typeof model.value.config !== "object") {
@@ -104,13 +105,30 @@ const responseModeEnabled = computed(
       </div>
     </div>
 
-    <label class="mt-4 block space-y-2 text-sm font-medium text-slate-700">
-      <span>Config JSON</span>
-      <textarea
-        class="input min-h-36 font-mono text-xs"
-        :value="JSON.stringify(model.config, null, 2)"
-        @change="updateConfig"
-      />
-    </label>
+    <div class="mt-4">
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm font-medium text-slate-700">Config JSON</span>
+        <button
+          data-testid="toggle-config-json"
+          class="button-secondary px-3 py-2 text-xs"
+          type="button"
+          @click="showConfigJson = !showConfigJson"
+        >
+          {{ showConfigJson ? "Hide config JSON" : "Show config JSON" }}
+        </button>
+      </div>
+
+      <label
+        v-if="showConfigJson"
+        class="mt-3 block space-y-2 text-sm font-medium text-slate-700"
+      >
+        <textarea
+          data-testid="config-json-textarea"
+          class="input min-h-36 font-mono text-xs"
+          :value="JSON.stringify(model.config, null, 2)"
+          @change="updateConfig"
+        />
+      </label>
+    </div>
   </section>
 </template>

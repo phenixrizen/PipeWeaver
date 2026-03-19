@@ -12,6 +12,7 @@ interface PipelineState {
   current: PipelineDefinition;
   samplePayload: string;
   sampleOutput: string;
+  savedSnapshot?: string;
   preview?: PreviewResult;
   loading: boolean;
   error?: string;
@@ -20,26 +21,47 @@ interface PipelineState {
 const readConfigString = (value: unknown) =>
   typeof value === "string" ? value : "";
 
-const syncEditorSamples = (state: PipelineState) => {
-  if (!state.current.source.config || typeof state.current.source.config !== "object") {
-    state.current.source.config = {};
+const applyEditorSamples = (
+  pipeline: PipelineDefinition,
+  samplePayload: string,
+  sampleOutput: string,
+) => {
+  const nextPipeline = JSON.parse(JSON.stringify(pipeline)) as PipelineDefinition;
+
+  if (
+    !nextPipeline.source.config ||
+    typeof nextPipeline.source.config !== "object"
+  ) {
+    nextPipeline.source.config = {};
   }
-  if (!state.current.target.config || typeof state.current.target.config !== "object") {
-    state.current.target.config = {};
+  if (
+    !nextPipeline.target.config ||
+    typeof nextPipeline.target.config !== "object"
+  ) {
+    nextPipeline.target.config = {};
   }
 
-  if (state.samplePayload.trim()) {
-    state.current.source.config.samplePayload = state.samplePayload;
+  if (samplePayload.trim()) {
+    nextPipeline.source.config.samplePayload = samplePayload;
   } else {
-    delete state.current.source.config.samplePayload;
+    delete nextPipeline.source.config.samplePayload;
   }
 
-  if (state.sampleOutput.trim()) {
-    state.current.target.config.sampleOutput = state.sampleOutput;
+  if (sampleOutput.trim()) {
+    nextPipeline.target.config.sampleOutput = sampleOutput;
   } else {
-    delete state.current.target.config.sampleOutput;
+    delete nextPipeline.target.config.sampleOutput;
   }
+
+  return nextPipeline;
 };
+
+const serializePipelineSnapshot = (
+  pipeline: PipelineDefinition,
+  samplePayload: string,
+  sampleOutput: string,
+) =>
+  JSON.stringify(applyEditorSamples(pipeline, samplePayload, sampleOutput));
 
 // usePipelineStore centralizes editor state so route views stay focused on layout and composition.
 export const usePipelineStore = defineStore("pipelines", {
@@ -48,10 +70,23 @@ export const usePipelineStore = defineStore("pipelines", {
     current: blankPipeline(),
     samplePayload: blankSamplePayload,
     sampleOutput: blankSampleOutput,
+    savedSnapshot: undefined,
     preview: undefined,
     loading: false,
     error: undefined,
   }),
+  getters: {
+    isCurrentSaved: (state) =>
+      Boolean(
+        state.savedSnapshot &&
+          state.savedSnapshot ===
+            serializePipelineSnapshot(
+              state.current,
+              state.samplePayload,
+              state.sampleOutput,
+            ),
+      ),
+  },
   actions: {
     async loadPipelines() {
       this.loading = true;
@@ -70,6 +105,7 @@ export const usePipelineStore = defineStore("pipelines", {
       this.preview = undefined;
       this.samplePayload = blankSamplePayload;
       this.sampleOutput = blankSampleOutput;
+      this.savedSnapshot = undefined;
     },
     async loadPipeline(id: string) {
       this.loading = true;
@@ -77,6 +113,11 @@ export const usePipelineStore = defineStore("pipelines", {
         this.current = await api.getPipeline(id);
         this.samplePayload = readConfigString(this.current.source.config?.samplePayload);
         this.sampleOutput = readConfigString(this.current.target.config?.sampleOutput);
+        this.savedSnapshot = serializePipelineSnapshot(
+          this.current,
+          this.samplePayload,
+          this.sampleOutput,
+        );
       } finally {
         this.loading = false;
       }
@@ -85,10 +126,19 @@ export const usePipelineStore = defineStore("pipelines", {
       this.loading = true;
       this.error = undefined;
       try {
-        syncEditorSamples(this);
-        this.current = await api.savePipeline(this.current);
+        const persistedPipeline = applyEditorSamples(
+          this.current,
+          this.samplePayload,
+          this.sampleOutput,
+        );
+        this.current = await api.savePipeline(persistedPipeline);
         this.samplePayload = readConfigString(this.current.source.config?.samplePayload);
         this.sampleOutput = readConfigString(this.current.target.config?.sampleOutput);
+        this.savedSnapshot = serializePipelineSnapshot(
+          this.current,
+          this.samplePayload,
+          this.sampleOutput,
+        );
         await this.loadPipelines();
       } catch (error) {
         this.error =

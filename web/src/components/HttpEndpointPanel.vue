@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { PipelineDefinition } from "../types/pipeline";
 
 const props = defineProps<{
   pipeline: PipelineDefinition;
   samplePayload: string;
+  isSaved: boolean;
 }>();
 
-const endpointPath = computed(
-  () => `/api/http/${props.pipeline.pipeline.id || "draft-pipeline"}`,
+const endpointIdentifier = computed(
+  () => props.pipeline.pipeline.id.trim() || "<pipeline-id>",
+);
+const endpointPath = computed(() => `/api/http/${endpointIdentifier.value}`);
+const canCopyCurl = computed(
+  () => props.isSaved && props.pipeline.pipeline.id.trim().length > 0,
 );
 
 const shouldReplyInline = computed(
@@ -55,6 +60,11 @@ const resetCopyStateLater = () => {
 };
 
 const copyCurlCommand = async () => {
+  if (!canCopyCurl.value) {
+    copyState.value = "idle";
+    return;
+  }
+
   try {
     await navigator.clipboard.writeText(sampleCurl.value);
     copyState.value = "copied";
@@ -67,6 +77,18 @@ const copyCurlCommand = async () => {
 onBeforeUnmount(() => {
   if (typeof window !== "undefined" && copyResetTimer !== undefined) {
     window.clearTimeout(copyResetTimer);
+  }
+});
+
+watch(canCopyCurl, (enabled) => {
+  if (enabled) {
+    return;
+  }
+
+  copyState.value = "idle";
+  if (typeof window !== "undefined" && copyResetTimer !== undefined) {
+    window.clearTimeout(copyResetTimer);
+    copyResetTimer = undefined;
   }
 });
 </script>
@@ -148,6 +170,8 @@ onBeforeUnmount(() => {
               data-testid="copy-curl-button"
               class="button-secondary px-3 py-2 text-xs"
               type="button"
+              :disabled="!canCopyCurl"
+              :class="!canCopyCurl ? 'cursor-not-allowed opacity-60' : ''"
               @click="copyCurlCommand"
             >
               {{
@@ -160,6 +184,12 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+        <p
+          v-if="!canCopyCurl"
+          class="mb-3 text-xs font-medium text-amber-700"
+        >
+          Save pipeline to copy a stable endpoint command.
+        </p>
         <pre
           class="min-h-48 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-cyan-100"
           >{{ sampleCurl }}</pre

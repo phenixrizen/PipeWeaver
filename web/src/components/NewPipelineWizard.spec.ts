@@ -147,6 +147,43 @@ it("infers the target schema from the sample output before opening the editor", 
   ]);
 });
 
+it("auto-selects the target format when the sample output editor detects one", async () => {
+  const pipeline = blankPipeline();
+
+  const wrapper = mount(NewPipelineWizard, {
+    props: {
+      pipeline,
+      samplePayload: "",
+      sampleOutput: "",
+      "onUpdate:pipeline": () => undefined,
+      "onUpdate:samplePayload": () => undefined,
+      "onUpdate:sampleOutput": () => undefined,
+    },
+    global: {
+      stubs: {
+        SamplePayloadEditor: SamplePayloadEditorStub,
+        PipelineAiAssistant: PipelineAiAssistantStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="wizard-name-input"]').setValue(
+    "Claims intake to CSV",
+  );
+  await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
+
+  const sourceSelects = wrapper.findAll("select");
+  await sourceSelects[0].setValue("http");
+  await sourceSelects[1].setValue("xml");
+  await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
+
+  const sampleEditors = wrapper.findAllComponents(SamplePayloadEditorStub);
+  sampleEditors[0].vm.$emit("detected-format", "json");
+  await wrapper.vm.$nextTick();
+
+  expect(pipeline.target.format).toBe("json");
+});
+
 it("infers explode repeat mode when the target sample fans repeated xml values into rows", async () => {
   const pipeline = blankPipeline();
 

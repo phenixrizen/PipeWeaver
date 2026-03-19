@@ -19,28 +19,54 @@ export interface AiDraftResponse {
   mappingFields?: FieldMapping[];
 }
 
+export interface AiModelOption {
+  id: string;
+  label: string;
+  sizeLabel: string;
+  vramRequiredMB: number;
+  vramLabel: string;
+  dropdownLabel: string;
+  note: string;
+}
+
 export const aiModelOptions = [
   {
     id: "Llama-3.1-8B-Instruct-q4f16_1-MLC",
-    label: "Llama 3.1 8B",
+    label: "Llama 3.1",
+    sizeLabel: "8B",
+    vramRequiredMB: 5001,
+    vramLabel: "~5.0 GB VRAM",
+    dropdownLabel: "Llama 3.1 · 8B · ~5.0 GB VRAM",
     note: "Primary local reasoning model for schema and mapping drafts.",
   },
   {
     id: "Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC",
-    label: "Hermes 2 Pro Llama 3 8B",
+    label: "Hermes 2 Pro Llama 3",
+    sizeLabel: "8B",
+    vramRequiredMB: 4976.13,
+    vramLabel: "~5.0 GB VRAM",
+    dropdownLabel: "Hermes 2 Pro Llama 3 · 8B · ~5.0 GB VRAM",
     note: "Best alternate for stronger instruction following and mapping polish.",
   },
   {
     id: "NeuralHermes-2.5-Mistral-7B-q4f16_1-MLC",
-    label: "NeuralHermes 2.5 Mistral 7B",
+    label: "NeuralHermes 2.5 Mistral",
+    sizeLabel: "7B",
+    vramRequiredMB: 4573.39,
+    vramLabel: "~4.6 GB VRAM",
+    dropdownLabel: "NeuralHermes 2.5 Mistral · 7B · ~4.6 GB VRAM",
     note: "Lighter secondary option when 8B startup cost is too high.",
   },
   {
     id: "Phi-3.5-mini-instruct-q4f16_1-MLC",
-    label: "Phi 3.5 Mini",
+    label: "Phi 3.5",
+    sizeLabel: "Mini",
+    vramRequiredMB: 3672.07,
+    vramLabel: "~3.7 GB VRAM",
+    dropdownLabel: "Phi 3.5 · Mini · ~3.7 GB VRAM",
     note: "Most efficient option when you need smaller local memory use.",
   },
-] as const;
+] as const satisfies readonly AiModelOption[];
 
 export const aiModeLabels: Record<AiDraftMode, string> = {
   studio: "Draft schema + mappings",
@@ -52,6 +78,106 @@ export const aiModeLabels: Record<AiDraftMode, string> = {
 
 export const isStructuredAiMode = (mode: AiDraftMode) => mode !== "explain";
 
+const nullableStringSchema = {
+  type: ["string", "null"],
+} as const;
+
+const nullableBooleanSchema = {
+  type: ["boolean", "null"],
+} as const;
+
+const transformJsonSchema = {
+  type: "object",
+  properties: {
+    type: { type: "string" },
+    value: {
+      type: ["string", "number", "boolean", "null"],
+    },
+    values: {
+      type: ["array", "null"],
+      items: { type: "string" },
+    },
+    then: nullableStringSchema,
+    else: nullableStringSchema,
+  },
+  required: ["type"],
+  additionalProperties: false,
+} as const;
+
+const mappingFieldJsonSchema = {
+  type: "object",
+  properties: {
+    from: nullableStringSchema,
+    expression: nullableStringSchema,
+    to: { type: "string" },
+    required: nullableBooleanSchema,
+    repeatMode: {
+      type: ["string", "null"],
+      enum: ["inherit", "preserve", "explode", null],
+    },
+    joinDelimiter: nullableStringSchema,
+    transforms: {
+      type: "array",
+      items: transformJsonSchema,
+    },
+  },
+  required: ["to", "transforms"],
+  additionalProperties: false,
+} as const;
+
+const schemaFieldJsonSchema = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    type: { type: "string" },
+    required: nullableBooleanSchema,
+    description: nullableStringSchema,
+    column: nullableStringSchema,
+    index: {
+      type: ["integer", "null"],
+    },
+    fields: {
+      type: ["array", "null"],
+      items: {
+        type: "object",
+        additionalProperties: true,
+      },
+    },
+  },
+  required: ["name", "type"],
+  additionalProperties: true,
+} as const;
+
+const targetSchemaJsonSchema = {
+  type: ["object", "null"],
+  properties: {
+    name: nullableStringSchema,
+    type: { type: "string" },
+    fields: {
+      type: "array",
+      items: schemaFieldJsonSchema,
+    },
+    xsdNote: nullableStringSchema,
+  },
+  required: ["type", "fields"],
+  additionalProperties: true,
+} as const;
+
+export const structuredAiResponseSchema = JSON.stringify({
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    pipelineDescription: nullableStringSchema,
+    targetSchema: targetSchemaJsonSchema,
+    mappingFields: {
+      type: ["array", "null"],
+      items: mappingFieldJsonSchema,
+    },
+  },
+  required: ["summary"],
+  additionalProperties: false,
+});
+
 const structuredResponseRules = `Return valid JSON with this shape:
 {
   "summary": string,
@@ -60,6 +186,7 @@ const structuredResponseRules = `Return valid JSON with this shape:
   "mappingFields": FieldMapping[] | undefined
 }
 Only include the sections relevant to the requested task.
+Follow the JSON schema exactly.
 Return exactly one JSON object.
 The first character must be { and the last character must be }.
 Do not include markdown fences or any commentary outside the JSON object.`;

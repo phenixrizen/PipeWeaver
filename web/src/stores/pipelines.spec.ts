@@ -83,3 +83,29 @@ it("hydrates editor samples from the stored pipeline config", async () => {
   );
   expect(store.sampleOutput).toBe("name,code\nBob,12345\nBob,67890");
 });
+
+it("tracks whether the current pipeline has a stable saved snapshot", async () => {
+  const store = usePipelineStore();
+  store.current = blankPipeline();
+  store.current.pipeline.id = "claims";
+  store.current.pipeline.name = "Claims export";
+  store.current.source.type = "http";
+  store.current.source.format = "xml";
+  store.current.target.type = "stdout";
+  store.current.target.format = "csv";
+  store.samplePayload = "<envelope><claim><name>Bob</name></claim></envelope>";
+
+  expect(store.isCurrentSaved).toBe(false);
+
+  await store.saveCurrent();
+
+  expect(store.isCurrentSaved).toBe(true);
+
+  store.current.pipeline.name = "Claims export v2";
+
+  expect(store.isCurrentSaved).toBe(false);
+
+  store.createDraft();
+
+  expect(store.isCurrentSaved).toBe(false);
+});

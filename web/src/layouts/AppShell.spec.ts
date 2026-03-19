@@ -57,7 +57,7 @@ it("shows the live pipeline name in the top bar on editor routes", async () => {
   expect(wrapper.text()).toContain("Browse pipelines");
 });
 
-it("keeps the pipeline catalog route on the wide layout", async () => {
+it("keeps the pipeline catalog route on the shared 95 percent layout", async () => {
   const pinia = createPinia();
   setActivePinia(pinia);
   const router = buildRouter();
@@ -78,5 +78,5 @@ it("keeps the pipeline catalog route on the wide layout", async () => {
   });
 
   const contentContainer = wrapper.find("main > div");
-  expect(contentContainer.classes()).toContain("md:w-[90%]");
+  expect(contentContainer.classes()).toContain("md:w-[95%]");
 });

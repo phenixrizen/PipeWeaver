@@ -13,7 +13,11 @@ import type { PipelineDefinition, PreviewResult } from "../types/pipeline";
 const pipeline = defineModel<PipelineDefinition>({ required: true });
 const samplePayload = defineModel<string>("samplePayload", { required: true });
 const sampleOutput = defineModel<string>("sampleOutput", { required: true });
-const props = defineProps<{ preview?: PreviewResult; loading: boolean }>();
+const props = defineProps<{
+  preview?: PreviewResult;
+  loading: boolean;
+  isSaved: boolean;
+}>();
 const emit = defineEmits<{ save: []; preview: [] }>();
 
 const connectorTypes = ["http", "file", "stdout", "postgres", "kafka"];
@@ -212,7 +216,11 @@ watch(
     </div>
 
     <div v-show="activeTab === 'endpoint'">
-      <HttpEndpointPanel :pipeline="pipeline" :sample-payload="samplePayload" />
+      <HttpEndpointPanel
+        :pipeline="pipeline"
+        :sample-payload="samplePayload"
+        :is-saved="props.isSaved"
+      />
     </div>
 
     <div v-show="activeTab === 'sample'">
