@@ -17,7 +17,7 @@ func main() {
 		storeRoot = ".pipeweaver/pipelines"
 	}
 
-	seedExamples := flag.Bool("seed-examples", false, "seed the pipeline store with example definitions before serving requests")
+	seedExamples := flag.Bool("seed-examples", false, "seed the pipeline store with example definitions and example assets before serving requests")
 	seedSource := flag.String("seed-source", "examples/pipelines", "directory of pipeline definitions used when seeding the store")
 	flag.Parse()
 

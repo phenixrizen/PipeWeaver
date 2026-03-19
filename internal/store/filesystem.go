@@ -1,8 +1,9 @@
 package store
 
 import (
-	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,11 +39,20 @@ func (s *FilesystemStore) Save(definition pipeline.Definition) error {
 }
 
 // SeedFromDir copies pipeline definitions from a source directory into the store.
-// Existing stored pipeline IDs are preserved so local edits are not overwritten.
+// Existing stored pipeline IDs are overwritten so refreshed built-in examples replace stale local copies.
 func (s *FilesystemStore) SeedFromDir(sourceRoot string) (int, error) {
 	entries, err := os.ReadDir(sourceRoot)
 	if err != nil {
 		return 0, fmt.Errorf("read seed source: %w", err)
+	}
+
+	sourceBase := filepath.Dir(sourceRoot)
+	seededExamplesRoot := filepath.Join(filepath.Dir(s.Root), "examples")
+	if err := copySeedAssets(filepath.Join(sourceBase, "inputs"), filepath.Join(seededExamplesRoot, "inputs")); err != nil {
+		return 0, fmt.Errorf("copy seed inputs: %w", err)
+	}
+	if err := copySeedAssets(filepath.Join(sourceBase, "outputs"), filepath.Join(seededExamplesRoot, "outputs")); err != nil {
+		return 0, fmt.Errorf("copy seed outputs: %w", err)
 	}
 
 	seeded := 0
@@ -58,12 +68,8 @@ func (s *FilesystemStore) SeedFromDir(sourceRoot string) (int, error) {
 		if definition.Pipeline.ID == "" {
 			return seeded, fmt.Errorf("seed pipeline %q is missing a pipeline id", entry.Name())
 		}
-
-		targetPath := filepath.Join(s.Root, definition.Pipeline.ID+".yaml")
-		if _, err := os.Stat(targetPath); err == nil {
-			continue
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return seeded, fmt.Errorf("check existing seeded pipeline %q: %w", definition.Pipeline.ID, err)
+		if err := hydrateSeedDefinition(&definition, sourceBase, seededExamplesRoot); err != nil {
+			return seeded, fmt.Errorf("hydrate seeded pipeline %q: %w", definition.Pipeline.ID, err)
 		}
 
 		if err := s.Save(definition); err != nil {
@@ -104,4 +110,138 @@ func (s *FilesystemStore) Get(id string) (pipeline.Definition, error) {
 func isPipelineDefinitionFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".yaml" || ext == ".yml" || ext == ".json"
+}
+
+func copySeedAssets(sourceRoot string, targetRoot string) error {
+	info, err := os.Stat(sourceRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+
+	return filepath.WalkDir(sourceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		relativePath, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(targetRoot, relativePath)
+
+		if entry.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+
+		sourceFile, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer sourceFile.Close()
+
+		targetFile, err := os.Create(targetPath)
+		if err != nil {
+			return err
+		}
+		defer targetFile.Close()
+
+		if _, err := io.Copy(targetFile, sourceFile); err != nil {
+			return err
+		}
+
+		return os.Chmod(targetPath, 0o644)
+	})
+}
+
+func hydrateSeedDefinition(definition *pipeline.Definition, sourceBase string, seededExamplesRoot string) error {
+	if definition.Source.Config == nil {
+		definition.Source.Config = map[string]any{}
+	}
+	if definition.Target.Config == nil {
+		definition.Target.Config = map[string]any{}
+	}
+
+	if sourcePath, ok := definition.Source.Config["path"].(string); ok && strings.TrimSpace(sourcePath) != "" {
+		resolvedSourcePath := resolveSeedSourcePath(sourcePath, sourceBase)
+		if definition.Source.Type == "file" {
+			if sample, ok := definition.Source.Config["samplePayload"].(string); !ok || strings.TrimSpace(sample) == "" {
+				payload, err := os.ReadFile(resolvedSourcePath)
+				if err != nil {
+					return fmt.Errorf("read seed source sample %q: %w", resolvedSourcePath, err)
+				}
+				definition.Source.Config["samplePayload"] = string(payload)
+			}
+		}
+		definition.Source.Config["path"] = rewriteSeededAssetPath(sourcePath, sourceBase, seededExamplesRoot)
+	}
+
+	if targetPath, ok := definition.Target.Config["path"].(string); ok && strings.TrimSpace(targetPath) != "" {
+		definition.Target.Config["path"] = rewriteSeededAssetPath(targetPath, sourceBase, seededExamplesRoot)
+		if sample, ok := definition.Target.Config["sampleOutput"].(string); (!ok || strings.TrimSpace(sample) == "") && isExampleAssetPath(targetPath, "outputs", sourceBase) {
+			payload, err := os.ReadFile(resolveSeedSourcePath(targetPath, sourceBase))
+			if err != nil {
+				return fmt.Errorf("read seed target sample %q: %w", targetPath, err)
+			}
+			definition.Target.Config["sampleOutput"] = string(payload)
+		}
+	}
+
+	return nil
+}
+
+func isExampleAssetPath(rawPath string, assetDir string, sourceBase string) bool {
+	cleaned := filepath.Clean(rawPath)
+	examplePrefix := filepath.Clean(filepath.Join("examples", assetDir))
+	if cleaned == examplePrefix || strings.HasPrefix(cleaned, examplePrefix+string(os.PathSeparator)) {
+		return true
+	}
+	absolutePrefix := filepath.Join(sourceBase, assetDir)
+	return filepath.IsAbs(cleaned) && (cleaned == absolutePrefix || strings.HasPrefix(cleaned, absolutePrefix+string(os.PathSeparator)))
+}
+
+func resolveSeedSourcePath(rawPath string, sourceBase string) string {
+	cleaned := filepath.Clean(rawPath)
+	if filepath.IsAbs(cleaned) {
+		return cleaned
+	}
+
+	for _, assetDir := range []string{"inputs", "outputs"} {
+		examplePrefix := filepath.Clean(filepath.Join("examples", assetDir))
+		if cleaned == examplePrefix || strings.HasPrefix(cleaned, examplePrefix+string(os.PathSeparator)) {
+			relativePath, err := filepath.Rel(examplePrefix, cleaned)
+			if err != nil {
+				return cleaned
+			}
+			return filepath.Join(sourceBase, assetDir, relativePath)
+		}
+	}
+
+	return cleaned
+}
+
+func rewriteSeededAssetPath(rawPath string, sourceBase string, seededExamplesRoot string) string {
+	for _, assetDir := range []string{"inputs", "outputs"} {
+		if !isExampleAssetPath(rawPath, assetDir, sourceBase) {
+			continue
+		}
+
+		sourcePath := resolveSeedSourcePath(rawPath, sourceBase)
+		relativePath, err := filepath.Rel(filepath.Join(sourceBase, assetDir), sourcePath)
+		if err != nil {
+			return rawPath
+		}
+		return filepath.Join(seededExamplesRoot, assetDir, relativePath)
+	}
+
+	return rawPath
 }

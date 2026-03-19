@@ -1,0 +1,9 @@
+<records>
+  <record>
+    <event_id>EVT-1</event_id>
+    <region>NA</region>
+    <member_name>Ada Lovelace</member_name>
+    <plan_code>GOLD</plan_code>
+    <status>APPROVED</status>
+  </record>
+</records>

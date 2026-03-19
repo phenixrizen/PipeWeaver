@@ -15,7 +15,7 @@ defineProps<{ preview?: PreviewResult }>();
       </div>
       <span
         v-if="preview"
-        class="rounded-full bg-violet-50 px-3 py-1 text-xs font-medium text-violet-600"
+        class="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-600"
       >
         {{ preview.durationMs }} ms
       </span>

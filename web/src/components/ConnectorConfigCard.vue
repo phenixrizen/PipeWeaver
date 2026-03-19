@@ -76,25 +76,25 @@ const responseModeEnabled = computed(
 
     <div
       v-if="isTargetCard"
-      class="mt-4 rounded-2xl border border-violet-100 bg-violet-50/70 p-4"
+      class="mt-4 rounded-2xl border border-sky-100 bg-sky-50/70 p-4"
     >
       <div class="flex items-start justify-between gap-4">
         <div>
-          <p class="text-sm font-semibold text-violet-900">
+          <p class="text-sm font-semibold text-sky-900">
             HTTP response mode
           </p>
-          <p class="mt-1 text-sm leading-6 text-violet-700">
+          <p class="mt-1 text-sm leading-6 text-sky-700">
             When this pipeline is triggered through the HTTP endpoint, send the
             transformed payload back on the same connection.
           </p>
         </div>
         <label
-          class="inline-flex items-center gap-2 text-sm font-medium text-violet-900"
+          class="inline-flex items-center gap-2 text-sm font-medium text-sky-900"
         >
           <input
             :checked="responseModeEnabled"
             type="checkbox"
-            class="h-4 w-4 rounded border-violet-300 text-violet-500 focus:ring-violet-200"
+            class="h-4 w-4 rounded border-sky-300 text-sky-500 focus:ring-sky-200"
             @change="
               setResponseMode(($event.target as HTMLInputElement).checked)
             "

@@ -89,3 +89,57 @@ it("creates mappings from ai suggestions for matching csv columns", async () => 
     },
   ]);
 });
+
+it("creates mappings from ai suggestions for nested json source paths", async () => {
+  const Harness = defineComponent({
+    components: { MappingTable },
+    setup() {
+      const rows = ref([]);
+      const schema = {
+        type: "object",
+        fields: [
+          { name: "customer_id", type: "string" },
+          { name: "customer_name", type: "string" },
+        ],
+      };
+
+      return { rows, schema };
+    },
+    template: `
+      <MappingTable
+        v-model="rows"
+        source-format="json"
+        sample-payload='{"customer":{"id":"1001","name":"Ada Lovelace"}}'
+        :target-schema="schema"
+      />
+    `,
+  });
+
+  const wrapper = mount(Harness);
+
+  const aiButton = wrapper
+    .findAll("button")
+    .find((button) => button.text().includes("AI suggest mappings"));
+
+  await aiButton?.trigger("click");
+  await wrapper.vm.$nextTick();
+
+  expect(
+    (wrapper.vm as unknown as { rows: { from: string; to: string }[] }).rows,
+  ).toEqual([
+    {
+      from: "customer.id",
+      to: "customer_id",
+      required: false,
+      expression: "",
+      transforms: [{ type: "trim" }],
+    },
+    {
+      from: "customer.name",
+      to: "customer_name",
+      required: false,
+      expression: "",
+      transforms: [{ type: "trim" }],
+    },
+  ]);
+});

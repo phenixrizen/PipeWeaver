@@ -1,0 +1,12 @@
+{
+  "customer": {
+    "id": "C-1001",
+    "name": "Ada Lovelace"
+  },
+  "invoice": {
+    "id": "INV-1001",
+    "service_date": "2026-03-18",
+    "amount": 12.5,
+    "currency": "USD"
+  }
+}

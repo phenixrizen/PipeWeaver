@@ -1,15 +1,45 @@
 pipeline:
   id: json_file_to_tsv
-  name: JSON file to TSV
-  description: Flatten nested customer invoice records from JSON into TSV rows.
+  name: Customer billing JSON to TSV
+  description: Flatten nested customer billing records from JSON into a tab-delimited finance export.
 source:
   type: file
   format: json
   config:
     path: examples/inputs/customers.json
+    samplePayload: |
+      [
+        {
+          "customer_id": "1001",
+          "profile": {
+            "first_name": "Ada",
+            "last_name": "Lovelace"
+          },
+          "invoice": {
+            "amount": "12.50",
+            "currency": "USD"
+          }
+        },
+        {
+          "customer_id": "1002",
+          "profile": {
+            "first_name": "Grace",
+            "last_name": "Hopper"
+          },
+          "invoice": {
+            "amount": "41.75",
+            "currency": "USD"
+          }
+        }
+      ]
 target:
   type: stdout
   format: tsv
+  config:
+    sampleOutput: |
+      customer_id	full_name	amount	currency
+      1001	Ada Lovelace	12.50	USD
+      1002	Grace Hopper	41.75	USD
 mapping:
   fields:
     - from: customer_id

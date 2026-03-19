@@ -30,6 +30,16 @@ func fieldToJSONSchema(field Field) map[string]any {
 			result[key] = value
 		}
 	}
+	if field.Type == TypeArray {
+		if len(field.Fields) > 0 {
+			result["items"] = map[string]any{
+				"type":       "object",
+				"properties": ToJSONSchema(Definition{Type: TypeObject, Fields: field.Fields})["properties"],
+			}
+		} else {
+			result["items"] = map[string]any{}
+		}
+	}
 	if field.Description != "" {
 		result["description"] = field.Description
 	}

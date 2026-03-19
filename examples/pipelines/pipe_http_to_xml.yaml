@@ -1,18 +1,29 @@
 pipeline:
   id: pipe_http_to_xml
-  name: Pipe-delimited HTTP to XML
-  description: Turn a pipe-delimited HTTP sample payload into XML-ready event records.
+  name: Eligibility events pipe to XML
+  description: Turn a pipe-delimited eligibility feed into XML event records for downstream acknowledgment.
 source:
   type: http
   format: pipe
   config:
     samplePayload: |
-      event_id|region|customer_name|amount
-      EVT-1|NA| Ada Lovelace |12.50
-      EVT-2|EU|Grace Hopper|41.75
+      event_id|region|member_name|plan_code|status
+      EVT-1|NA| Ada Lovelace |GOLD|approved
+      EVT-2|EU|Grace Hopper|PLUS|pending_review
 target:
   type: stdout
   format: xml
+  config:
+    sampleOutput: |
+      <records>
+        <record>
+          <event_id>EVT-1</event_id>
+          <region>NA</region>
+          <member_name>Ada Lovelace</member_name>
+          <plan_code>GOLD</plan_code>
+          <status>APPROVED</status>
+        </record>
+      </records>
 mapping:
   fields:
     - from: event_id
@@ -21,11 +32,18 @@ mapping:
       to: region
       transforms:
         - type: upper
-    - from: customer_name
-      to: customer_name
+    - from: member_name
+      to: member_name
       transforms:
         - type: trim
-    - from: amount
-      to: amount
+    - from: plan_code
+      to: plan_code
       transforms:
-        - type: to_float
+        - type: upper
+    - from: status
+      to: status
+      transforms:
+        - type: replace
+          values:
+            - "_"
+            - " "

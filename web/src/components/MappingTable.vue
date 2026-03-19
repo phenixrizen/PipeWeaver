@@ -2,6 +2,12 @@
 import { computed, ref } from "vue";
 import TransformEditor from "./TransformEditor.vue";
 import { validateExpression } from "../lib/cel";
+import {
+  applySuggestedMappings,
+  flattenSchemaLeafPaths,
+  inferSourceFields,
+  upsertMapping,
+} from "../lib/schema";
 import type { FieldMapping, SchemaDefinition } from "../types/pipeline";
 
 const props = defineProps<{
@@ -29,108 +35,35 @@ const expressionStates = computed(() =>
   ),
 );
 
-const csvColumns = computed(() => {
-  if (!["csv", "tsv", "pipe"].includes(props.sourceFormat)) {
-    return [];
-  }
-
-  const delimiter =
-    props.sourceFormat === "tsv"
-      ? "\t"
-      : props.sourceFormat === "pipe"
-        ? "|"
-        : ",";
-  const headerLine = props.samplePayload.split(/\r?\n/, 1)[0]?.trim();
-  if (!headerLine) {
-    return [];
-  }
-
-  return headerLine
-    .split(delimiter)
-    .map((column) => column.trim())
-    .filter(Boolean);
-});
-
-const flattenSchemaFields = (
-  fields: SchemaDefinition["fields"] | undefined,
-  prefix = "",
-): string[] => {
-  if (!fields?.length) {
-    return [];
-  }
-
-  return fields.flatMap((field) => {
-    const path = prefix ? `${prefix}.${field.name}` : field.name;
-    if (field.type === "object" && field.fields?.length) {
-      return flattenSchemaFields(field.fields, path);
-    }
-    return [path];
-  });
-};
-
-const targetPaths = computed(() =>
-  flattenSchemaFields(props.targetSchema?.fields),
+const sourceFields = computed(() =>
+  inferSourceFields(props.sourceFormat, props.samplePayload),
 );
 
-const normalizeToken = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+const sourceFieldLookup = computed<Record<string, { type: string }>>(() =>
+  Object.fromEntries(
+    sourceFields.value.map((field) => [field.path, { type: field.type }]),
+  ),
+);
 
-const scoreMatch = (source: string, target: string) => {
-  const sourceTokens = normalizeToken(source);
-  const targetTokens = normalizeToken(target.split(".").pop() || target);
-  const overlap = sourceTokens.filter((token) =>
-    targetTokens.includes(token),
-  ).length;
-  if (overlap === 0) {
-    return 0;
-  }
-  const union = new Set([...sourceTokens, ...targetTokens]).size;
-  return overlap / union;
-};
-
-const upsertMapping = (source: string, target: string) => {
-  const existing = model.value.find((row) => row.to === target);
-  if (existing) {
-    existing.from = source;
-    existing.expression = "";
-    if (!existing.transforms.length) {
-      existing.transforms = [{ type: "trim" }];
-    }
-    return;
-  }
-
-  model.value.push({
-    from: source,
-    to: target,
-    required: false,
-    expression: "",
-    transforms: [{ type: "trim" }],
-  });
-};
+const targetPaths = computed(() =>
+  flattenSchemaLeafPaths(props.targetSchema?.fields),
+);
 
 const handleDrop = (target: string) => {
   if (!draggedSource.value) {
     return;
   }
-  upsertMapping(draggedSource.value, target);
+  upsertMapping(
+    model.value,
+    draggedSource.value,
+    target,
+    sourceFields.value.find((field) => field.path === draggedSource.value),
+  );
   draggedSource.value = null;
 };
 
 const applyAISuggestions = () => {
-  targetPaths.value.forEach((target) => {
-    const bestMatch = csvColumns.value
-      .map((source) => ({ source, score: scoreMatch(source, target) }))
-      .sort((left, right) => right.score - left.score)[0];
-
-    if (bestMatch && bestMatch.score >= 0.34) {
-      upsertMapping(bestMatch.source, target);
-    }
-  });
+  applySuggestedMappings(model.value, sourceFields.value, targetPaths.value);
 };
 </script>
 
@@ -143,12 +76,12 @@ const applyAISuggestions = () => {
         <p class="panel-title">Field mappings</p>
         <p class="mt-2 text-sm leading-6 text-slate-600">
           Map source fields into target paths with explicit transforms, or use
-          drag-and-drop AI assist for CSV-style payloads.
+          drag-and-drop suggestions to pre-wire the obvious matches.
         </p>
       </div>
       <div class="flex flex-wrap gap-3">
         <button
-          v-if="csvColumns.length && targetPaths.length"
+          v-if="sourceFields.length && targetPaths.length"
           class="button-secondary"
           type="button"
           @click="applyAISuggestions"
@@ -162,12 +95,12 @@ const applyAISuggestions = () => {
     </div>
 
     <div
-      v-if="csvColumns.length && targetPaths.length"
+      v-if="sourceFields.length && targetPaths.length"
       class="mb-6 grid gap-4 xl:grid-cols-[0.95fr,1.05fr]"
     >
       <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
         <div class="flex items-center justify-between gap-3">
-          <p class="text-sm font-semibold text-slate-900">CSV columns</p>
+          <p class="text-sm font-semibold text-slate-900">Source fields</p>
           <span
             class="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500"
           >
@@ -176,21 +109,24 @@ const applyAISuggestions = () => {
         </div>
         <div class="mt-4 flex flex-wrap gap-2">
           <button
-            v-for="column in csvColumns"
-            :key="column"
-            class="rounded-full border border-violet-200 bg-white px-3 py-2 text-sm font-medium text-violet-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"
+            v-for="source in sourceFields"
+            :key="source.path"
+            class="rounded-full border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-sky-700 shadow-sm transition hover:border-sky-300 hover:bg-sky-50"
             type="button"
             draggable="true"
-            @dragstart="draggedSource = column"
+            @dragstart="draggedSource = source.path"
             @dragend="draggedSource = null"
           >
-            {{ column }}
+            {{ source.label }}
+            <span class="ml-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+              {{ source.type }}
+            </span>
           </button>
         </div>
       </div>
 
       <div
-        class="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,_rgba(139,92,246,0.06),_rgba(255,255,255,1))] p-4"
+        class="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,_rgba(14,165,233,0.08),_rgba(255,255,255,1))] p-4"
       >
         <div class="flex items-center justify-between gap-3">
           <p class="text-sm font-semibold text-slate-900">
@@ -207,7 +143,7 @@ const applyAISuggestions = () => {
             v-for="target in targetPaths"
             :key="target"
             class="rounded-2xl border border-dashed border-slate-300 bg-white p-4 transition"
-            :class="draggedSource ? 'border-violet-300 shadow-sm' : ''"
+            :class="draggedSource ? 'border-sky-300 shadow-sm' : ''"
             @dragover.prevent
             @drop.prevent="handleDrop(target)"
           >
@@ -222,7 +158,7 @@ const applyAISuggestions = () => {
             <p class="mt-2 text-xs text-slate-500">
               {{
                 model.find((row) => row.to === target)?.from ||
-                "Awaiting mapped source column"
+                "Awaiting mapped source field"
               }}
             </p>
           </div>
@@ -271,11 +207,36 @@ const applyAISuggestions = () => {
             <input
               v-model="row.required"
               type="checkbox"
-              class="h-4 w-4 rounded border-slate-300 text-violet-500 focus:ring-violet-200"
+              class="h-4 w-4 rounded border-slate-300 text-sky-500 focus:ring-sky-200"
             />
             Required
           </label>
         </div>
+        <div class="mt-3 grid gap-3 md:grid-cols-[1fr,1fr]">
+          <label class="space-y-2 text-sm font-medium text-slate-700">
+            <span>Repeat mode</span>
+            <select v-model="row.repeatMode" class="input">
+              <option value="">inherit</option>
+              <option value="preserve">preserve</option>
+              <option value="explode">explode</option>
+            </select>
+          </label>
+          <label class="space-y-2 text-sm font-medium text-slate-700">
+            <span>Join delimiter</span>
+            <input
+              v-model="row.joinDelimiter"
+              class="input"
+              placeholder=", "
+              :disabled="row.repeatMode === 'explode'"
+            />
+          </label>
+        </div>
+        <p
+          v-if="row.from && sourceFieldLookup[row.from]?.type === 'array'"
+          class="mt-3 text-xs font-medium text-sky-700"
+        >
+          Repeated source field detected. Use `preserve` to keep the array or `explode` to emit one row per item.
+        </p>
         <div class="mt-4">
           <TransformEditor v-model="row.transforms" />
         </div>

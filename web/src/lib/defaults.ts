@@ -1,5 +1,30 @@
 import type { PipelineDefinition } from "../types/pipeline";
 
+export const blankPipeline = (): PipelineDefinition => ({
+  pipeline: {
+    id: "",
+    name: "",
+    description: "",
+  },
+  source: {
+    type: "",
+    format: "",
+    config: {},
+  },
+  target: {
+    type: "",
+    format: "",
+    config: {},
+  },
+  mapping: {
+    fields: [],
+  },
+  targetSchema: undefined,
+});
+
+export const blankSamplePayload = "";
+export const blankSampleOutput = "";
+
 // defaultPipeline provides a ready-to-edit configuration that mirrors the backend example workflow.
 export const defaultPipeline = (): PipelineDefinition => ({
   pipeline: {

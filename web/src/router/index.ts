@@ -6,7 +6,12 @@ import PipelineListView from "../views/PipelineListView.vue";
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", name: "pipelines", component: PipelineListView },
+    {
+      path: "/",
+      name: "pipelines",
+      component: PipelineListView,
+      meta: { wideContent: true },
+    },
     {
       path: "/pipelines/new",
       name: "pipeline-new",

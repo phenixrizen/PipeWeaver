@@ -2,8 +2,7 @@
 import { RouterLink } from "vue-router";
 import PipeWeaverLogo from "./PipeWeaverLogo.vue";
 
-defineProps<{ sidebarOpen: boolean }>();
-defineEmits<{ toggleSidebar: [] }>();
+defineProps<{ currentPipelineTitle?: string }>();
 </script>
 
 <template>
@@ -12,28 +11,19 @@ defineEmits<{ toggleSidebar: [] }>();
   >
     <div class="px-4 sm:px-6 lg:px-8">
       <div class="flex h-20 items-center justify-between gap-4">
-        <div class="flex items-center gap-3">
-          <button
-            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100 lg:hidden"
-            type="button"
-            :aria-expanded="sidebarOpen"
-            aria-controls="app-sidebar"
-            @click="$emit('toggleSidebar')"
-          >
-            <span class="sr-only">Toggle navigation</span>
-            <svg class="h-5 w-5 fill-current" viewBox="0 0 24 24">
-              <rect x="4" y="6" width="16" height="2" rx="1" />
-              <rect x="4" y="11" width="16" height="2" rx="1" />
-              <rect x="4" y="16" width="16" height="2" rx="1" />
-            </svg>
-          </button>
-
+        <div class="flex min-w-0 items-center gap-4">
           <div>
             <PipeWeaverLogo compact />
             <p class="mt-2 hidden text-sm text-slate-500 sm:block">
               Build, test, and expose transformation flows from one workspace.
             </p>
           </div>
+          <p
+            v-if="currentPipelineTitle"
+            class="hidden max-w-64 truncate text-sm font-semibold text-slate-700 lg:block"
+          >
+            {{ currentPipelineTitle }}
+          </p>
         </div>
 
         <div class="flex items-center gap-2 sm:gap-3">

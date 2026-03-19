@@ -10,7 +10,7 @@ defineProps<{ pipelines: PipelineDefinition[] }>();
       v-for="pipeline in pipelines"
       :key="pipeline.pipeline.id"
       :to="`/pipelines/${pipeline.pipeline.id}`"
-      class="panel group block p-5 transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md"
+      class="panel group block p-5 transition hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md"
     >
       <div class="flex items-start justify-between gap-4">
         <div>
@@ -20,7 +20,7 @@ defineProps<{ pipelines: PipelineDefinition[] }>();
             {{ pipeline.pipeline.id }}
           </p>
           <h3
-            class="mt-2 text-xl font-semibold text-gray-900 transition group-hover:text-violet-600"
+            class="mt-2 text-xl font-semibold text-gray-900 transition group-hover:text-sky-600"
           >
             {{ pipeline.pipeline.name }}
           </h3>
@@ -29,7 +29,7 @@ defineProps<{ pipelines: PipelineDefinition[] }>();
           </p>
         </div>
         <span
-          class="rounded-full bg-violet-50 px-3 py-1 text-xs font-medium text-violet-600"
+          class="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-600"
         >
           Open
         </span>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { PipelineDefinition } from "../types/pipeline";
 
 const props = defineProps<{
@@ -14,6 +14,9 @@ const endpointPath = computed(
 const shouldReplyInline = computed(
   () => props.pipeline.target.config?.responseMode === "reply",
 );
+const copyState = ref<"idle" | "copied" | "error">("idle");
+
+let copyResetTimer: number | undefined;
 
 const contentType = computed(() => {
   switch (props.pipeline.source.format) {
@@ -37,12 +40,41 @@ const sampleCurl = computed(() => {
     `curl -X POST http://localhost:8080${endpointPath.value} \\\n  -H 'Content-Type: ${contentType.value}' \\\n  --data-binary '${payload.replace(/'/g, "'\\''")}'`,
   ].join("\n");
 });
+
+const resetCopyStateLater = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (copyResetTimer !== undefined) {
+    window.clearTimeout(copyResetTimer);
+  }
+  copyResetTimer = window.setTimeout(() => {
+    copyState.value = "idle";
+    copyResetTimer = undefined;
+  }, 2000);
+};
+
+const copyCurlCommand = async () => {
+  try {
+    await navigator.clipboard.writeText(sampleCurl.value);
+    copyState.value = "copied";
+  } catch {
+    copyState.value = "error";
+  }
+  resetCopyStateLater();
+};
+
+onBeforeUnmount(() => {
+  if (typeof window !== "undefined" && copyResetTimer !== undefined) {
+    window.clearTimeout(copyResetTimer);
+  }
+});
 </script>
 
 <template>
   <section v-if="pipeline.source.type === 'http'" class="panel overflow-hidden">
     <div
-      class="border-b border-slate-200 bg-[linear-gradient(135deg,_rgba(139,92,246,0.12),_rgba(6,182,212,0.10))] p-5"
+      class="border-b border-slate-200 bg-[linear-gradient(135deg,_rgba(14,165,233,0.14),_rgba(59,130,246,0.10))] p-5"
     >
       <div
         class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"
@@ -106,11 +138,27 @@ const sampleCurl = computed(() => {
           <p class="text-sm font-semibold text-slate-900">
             Sample curl command
           </p>
-          <span
-            class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500"
-          >
-            localhost:8080
-          </span>
+          <div class="flex items-center gap-2">
+            <span
+              class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500"
+            >
+              localhost:8080
+            </span>
+            <button
+              data-testid="copy-curl-button"
+              class="button-secondary px-3 py-2 text-xs"
+              type="button"
+              @click="copyCurlCommand"
+            >
+              {{
+                copyState === "copied"
+                  ? "Copied"
+                  : copyState === "error"
+                    ? "Copy failed"
+                    : "Copy"
+              }}
+            </button>
+          </div>
         </div>
         <pre
           class="min-h-48 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-6 text-cyan-100"

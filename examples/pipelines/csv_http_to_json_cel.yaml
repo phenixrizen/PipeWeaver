@@ -1,55 +1,74 @@
 pipeline:
   id: csv_http_to_json_cel
-  name: CSV HTTP to JSON with CEL
-  description: Use CEL expressions to combine multiple CSV fields into target JSON values.
+  name: Member roster CSV to JSON with CEL
+  description: Use CEL expressions to compose member-facing JSON fields from incoming roster rows.
 source:
   type: http
   format: csv
   config:
     samplePayload: |
-      first_name,last_name,nickname,amount,currency
-      Ada,Lovelace,,12.50,USD
-      Grace,Hopper,Amazing Grace,41.75,USD
+      first_name,last_name,preferred_name,member_id,plan_code,effective_date
+      Ada,Lovelace,,M-1001,GOLD,2026-04-01
+      Grace,Hopper,Amazing Grace,M-1002,PLUS,2026-04-15
 target:
   type: stdout
   format: json
+  config:
+    sampleOutput: |
+      {
+        "member": {
+          "id": "M-1001",
+          "full_name": "Ada Lovelace",
+          "display_name": "Ada",
+          "enrollment_key": "M-1001:GOLD"
+        },
+        "coverage": {
+          "plan_code": "GOLD",
+          "effective_date": "2026-04-01"
+        }
+      }
 mapping:
   fields:
     - expression: 'record.first_name + " " + record.last_name'
-      to: customer.full_name
-    - expression: 'nickname != "" ? nickname : first_name'
-      to: customer.preferred_name
-    - expression: 'record.first_name + "-" + record.last_name + "-" + currency'
-      to: customer.synthetic_key
-    - from: amount
-      to: invoice.amount
+      to: member.full_name
+    - expression: 'preferred_name != "" ? preferred_name : first_name'
+      to: member.display_name
+    - expression: 'member_id + ":" + plan_code'
+      to: member.enrollment_key
+    - from: member_id
+      to: member.id
+    - from: plan_code
+      to: coverage.plan_code
       transforms:
-        - type: to_float
-    - from: currency
-      to: invoice.currency
+        - type: upper
+    - from: effective_date
+      to: coverage.effective_date
 targetSchema:
   type: object
   fields:
-    - name: customer
+    - name: member
       type: object
       required: true
       fields:
+        - name: id
+          type: string
+          required: true
         - name: full_name
           type: string
           required: true
-        - name: preferred_name
+        - name: display_name
           type: string
           required: true
-        - name: synthetic_key
+        - name: enrollment_key
           type: string
           required: true
-    - name: invoice
+    - name: coverage
       type: object
       required: true
       fields:
-        - name: amount
-          type: number
+        - name: plan_code
+          type: string
           required: true
-        - name: currency
+        - name: effective_date
           type: string
           required: true

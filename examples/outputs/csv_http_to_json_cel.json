@@ -1,0 +1,12 @@
+{
+  "member": {
+    "id": "M-1001",
+    "full_name": "Ada Lovelace",
+    "display_name": "Ada",
+    "enrollment_key": "M-1001:GOLD"
+  },
+  "coverage": {
+    "plan_code": "GOLD",
+    "effective_date": "2026-04-01"
+  }
+}

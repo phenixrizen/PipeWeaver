@@ -1,10 +1,20 @@
-<order>
-  <customer>
-    <id>500</id>
-    <name>Jane Doe</name>
-  </customer>
-  <invoice>
-    <amount>91.20</amount>
-    <currency>USD</currency>
-  </invoice>
-</order>
+<envelope>
+  <claim>
+    <claim_id>CLM-2026-00045</claim_id>
+    <name>Bob Stone</name>
+    <member>
+      <member_id>M-10045</member_id>
+      <plan>Gold PPO</plan>
+    </member>
+    <codes>
+      <code>12345</code>
+      <code>67890</code>
+    </codes>
+    <status>pending_review</status>
+    <received_at>2026-03-18T09:15:00Z</received_at>
+    <financials>
+      <total_billed>184.22</total_billed>
+      <currency>USD</currency>
+    </financials>
+  </claim>
+</envelope>

@@ -12,6 +12,7 @@ import type { PipelineDefinition, PreviewResult } from "../types/pipeline";
 
 const pipeline = defineModel<PipelineDefinition>({ required: true });
 const samplePayload = defineModel<string>("samplePayload", { required: true });
+const sampleOutput = defineModel<string>("sampleOutput", { required: true });
 const props = defineProps<{ preview?: PreviewResult; loading: boolean }>();
 const emit = defineEmits<{ save: []; preview: [] }>();
 
@@ -23,6 +24,7 @@ type EditorTab = {
     | "pipeline"
     | "endpoint"
     | "sample"
+    | "sample-output"
     | "mapping"
     | "assistant"
     | "schema"
@@ -34,10 +36,24 @@ type EditorTab = {
 
 const activeTab = ref<EditorTab["id"]>("pipeline");
 
+const runPreview = () => {
+  activeTab.value = "preview";
+  emit("preview");
+};
+
+const handleDetectedSampleFormat = (format: string) => {
+  pipeline.value.source.format = format;
+};
+
+const handleDetectedOutputFormat = (format: string) => {
+  pipeline.value.target.format = format;
+};
+
 const tabs = computed<EditorTab[]>(() => {
   const nextTabs: EditorTab[] = [
     { id: "pipeline", label: "Pipeline" },
     { id: "sample", label: "Sample payload" },
+    { id: "sample-output", label: "Sample output" },
     { id: "mapping", label: "Mapping" },
     { id: "assistant", label: "AI copilot" },
     { id: "schema", label: "Target schema" },
@@ -71,7 +87,7 @@ watch(
   <div class="space-y-6">
     <section class="panel overflow-hidden">
       <div
-        class="bg-[radial-gradient(circle_at_top_left,_rgba(139,92,246,0.16),_transparent_35%),linear-gradient(180deg,_#ffffff,_#f8fafc)] p-6"
+        class="bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_35%),linear-gradient(180deg,_#ffffff,_#eff6ff)] p-6"
       >
         <div
           class="mb-6 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"
@@ -91,7 +107,7 @@ watch(
               class="button-secondary"
               type="button"
               :disabled="loading"
-              @click="emit('preview')"
+              @click="runPreview"
             >
               Run preview
             </button>
@@ -113,7 +129,7 @@ watch(
             class="rounded-2xl border px-4 py-2 text-sm font-semibold transition"
             :class="
               activeTab === tab.id
-                ? 'border-violet-500 bg-violet-500 text-white shadow-lg shadow-violet-500/20'
+                ? 'border-sky-500 bg-sky-500 text-white shadow-lg shadow-sky-500/20'
                 : 'border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 hover:bg-white'
             "
             type="button"
@@ -157,10 +173,10 @@ watch(
               <input v-model="pipeline.pipeline.name" class="input" />
             </label>
             <div
-              class="rounded-3xl border border-violet-100 bg-violet-50/70 p-4 shadow-sm xl:row-span-2"
+              class="rounded-3xl border border-sky-100 bg-sky-50/70 p-4 shadow-sm xl:row-span-2"
             >
-              <p class="panel-title text-violet-500">Studio flow</p>
-              <p class="mt-3 text-sm leading-6 text-violet-900">
+              <p class="panel-title text-sky-500">Studio flow</p>
+              <p class="mt-3 text-sm leading-6 text-sky-900">
                 Save to expose the HTTP endpoint, tune connectors, and move
                 across the remaining tabs to refine the payload, schema, and
                 output preview.
@@ -203,6 +219,19 @@ watch(
       <SamplePayloadEditor
         v-model="samplePayload"
         :format="pipeline.source.format"
+        @detected-format="handleDetectedSampleFormat"
+      />
+    </div>
+
+    <div v-show="activeTab === 'sample-output'">
+      <SamplePayloadEditor
+        v-model="sampleOutput"
+        :format="pipeline.target.format"
+        title="Sample output"
+        description="Keep a realistic target example here so the copilot and schema editor can work against the expected output contract."
+        drop-hint="Drag a `.json`, `.xml`, `.csv`, or text file onto this card to load the expected output body."
+        idle-badge="Expected response body"
+        @detected-format="handleDetectedOutputFormat"
       />
     </div>
 
@@ -219,11 +248,18 @@ watch(
       <PipelineAiAssistant
         v-model:pipeline="pipeline"
         :sample-payload="samplePayload"
+        :sample-output="sampleOutput"
       />
     </div>
 
     <div v-show="activeTab === 'schema'">
-      <SchemaEditor v-model="pipeline.targetSchema" />
+      <SchemaEditor
+        v-model="pipeline.targetSchema"
+        v-model:mappings="pipeline.mapping.fields"
+        :source-format="pipeline.source.format"
+        :target-format="pipeline.target.format"
+        :sample-payload="samplePayload"
+      />
     </div>
 
     <div v-show="activeTab === 'preview'">

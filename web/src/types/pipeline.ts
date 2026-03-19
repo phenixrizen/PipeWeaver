@@ -11,6 +11,8 @@ export interface FieldMapping {
   expression?: string;
   to: string;
   required?: boolean;
+  repeatMode?: "inherit" | "preserve" | "explode";
+  joinDelimiter?: string;
   transforms: Transform[];
 }
 
@@ -18,10 +20,14 @@ export interface SchemaField {
   name: string;
   type: string;
   required?: boolean;
+  description?: string;
+  column?: string;
+  index?: number;
   fields?: SchemaField[];
 }
 
 export interface SchemaDefinition {
+  name?: string;
   type: string;
   fields: SchemaField[];
   jsonSchema?: unknown;

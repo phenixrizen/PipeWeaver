@@ -1,40 +1,151 @@
 {
   "pipeline": {
     "id": "xml_file_to_csv",
-    "name": "XML file to CSV",
-    "description": "Transform an XML order document into a CSV row."
+    "name": "Claim envelope XML to CSV",
+    "description": "Flatten a healthcare claim envelope XML payload into a CSV review export."
   },
   "source": {
     "type": "file",
     "format": "xml",
     "config": {
-      "path": "examples/inputs/order.xml"
+      "path": "examples/inputs/order.xml",
+      "samplePayload": "<envelope>\n  <claim>\n    <claim_id>CLM-2026-00045</claim_id>\n    <name>Bob Stone</name>\n    <member>\n      <member_id>M-10045</member_id>\n      <plan>Gold PPO</plan>\n    </member>\n    <codes>\n      <code>12345</code>\n      <code>67890</code>\n    </codes>\n    <status>pending_review</status>\n    <received_at>2026-03-18T09:15:00Z</received_at>\n    <financials>\n      <total_billed>184.22</total_billed>\n      <currency>USD</currency>\n    </financials>\n  </claim>\n</envelope>\n",
+      "xmlRepeatedElementsMode": "preserve",
+      "arrayJoinDelimiter": ", "
     }
   },
   "target": {
     "type": "file",
     "format": "csv",
     "config": {
-      "path": ".pipeweaver/output/orders.csv"
+      "path": ".pipeweaver/output/claims.csv",
+      "sampleOutput": "claim_id,claimant_name,member_id,plan_name,procedure_codes,claim_status,received_at,total_billed,currency\nCLM-2026-00045,Bob Stone,M-10045,Gold PPO,12345 | 67890,PENDING REVIEW,2026-03-18T09:15:00Z,184.22,USD\n"
     }
   },
   "mapping": {
     "fields": [
       {
-        "from": "customer.id",
-        "to": "customer_id"
+        "from": "claim.claim_id",
+        "to": "claim_id"
       },
       {
-        "from": "customer.name",
-        "to": "customer_name"
+        "from": "claim.name",
+        "to": "claimant_name"
       },
       {
-        "from": "invoice.amount",
-        "to": "amount"
+        "from": "claim.member.member_id",
+        "to": "member_id"
       },
       {
-        "from": "invoice.currency",
+        "from": "claim.member.plan",
+        "to": "plan_name"
+      },
+      {
+        "from": "claim.codes.code",
+        "to": "procedure_codes",
+        "joinDelimiter": " | ",
+        "transforms": []
+      },
+      {
+        "from": "claim.status",
+        "to": "claim_status",
+        "transforms": [
+          {
+            "type": "replace",
+            "values": [
+              "_",
+              " "
+            ]
+          },
+          {
+            "type": "upper"
+          }
+        ]
+      },
+      {
+        "from": "claim.received_at",
+        "to": "received_at"
+      },
+      {
+        "from": "claim.financials.total_billed",
+        "to": "total_billed",
+        "transforms": [
+          {
+            "type": "to_float"
+          }
+        ]
+      },
+      {
+        "from": "claim.financials.currency",
         "to": "currency"
+      }
+    ]
+  },
+  "targetSchema": {
+    "type": "object",
+    "fields": [
+      {
+        "name": "claim_id",
+        "type": "string",
+        "required": true,
+        "column": "claim_id",
+        "index": 0
+      },
+      {
+        "name": "claimant_name",
+        "type": "string",
+        "required": true,
+        "column": "claimant_name",
+        "index": 1
+      },
+      {
+        "name": "member_id",
+        "type": "string",
+        "required": true,
+        "column": "member_id",
+        "index": 2
+      },
+      {
+        "name": "plan_name",
+        "type": "string",
+        "required": true,
+        "column": "plan_name",
+        "index": 3
+      },
+      {
+        "name": "procedure_codes",
+        "type": "string",
+        "required": true,
+        "column": "procedure_codes",
+        "index": 4
+      },
+      {
+        "name": "claim_status",
+        "type": "string",
+        "required": true,
+        "column": "claim_status",
+        "index": 5
+      },
+      {
+        "name": "received_at",
+        "type": "string",
+        "required": true,
+        "column": "received_at",
+        "index": 6
+      },
+      {
+        "name": "total_billed",
+        "type": "number",
+        "required": true,
+        "column": "total_billed",
+        "index": 7
+      },
+      {
+        "name": "currency",
+        "type": "string",
+        "required": true,
+        "column": "currency",
+        "index": 8
       }
     ]
   }

@@ -12,16 +12,26 @@ type Record map[string]any
 func CloneRecord(input Record) Record {
 	output := Record{}
 	for key, value := range input {
-		switch typed := value.(type) {
-		case map[string]any:
-			output[key] = CloneRecord(Record(typed))
-		case Record:
-			output[key] = CloneRecord(typed)
-		default:
-			output[key] = typed
-		}
+		output[key] = cloneValue(value)
 	}
 	return output
+}
+
+func cloneValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return CloneRecord(Record(typed))
+	case Record:
+		return CloneRecord(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for index, item := range typed {
+			items[index] = cloneValue(item)
+		}
+		return items
+	default:
+		return typed
+	}
 }
 
 // GetPath resolves a dot-notated path from the canonical record model.

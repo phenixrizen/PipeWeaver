@@ -1,40 +1,56 @@
 pipeline:
   id: csv_http_to_json
-  name: CSV HTTP to JSON
-  description: Transform posted CSV rows into structured JSON.
+  name: Billing intake CSV to JSON
+  description: Turn posted billing rows into a structured JSON response for downstream order handling.
 source:
   type: http
   format: csv
   config:
     samplePayload: |
-      customer_id,full_name,amount
-      1001, Ada Lovelace ,12.50
-      1002,Grace Hopper,41.75
+      invoice_id,customer_id,customer_name,service_date,amount,currency
+      INV-1001,C-1001, Ada Lovelace ,2026-03-18,12.50,USD
+      INV-1002,C-1002,Grace Hopper,2026-03-19,41.75,USD
 target:
   type: stdout
   format: json
+  config:
+    sampleOutput: |
+      {
+        "customer": {
+          "id": "C-1001",
+          "name": "Ada Lovelace"
+        },
+        "invoice": {
+          "id": "INV-1001",
+          "service_date": "2026-03-18",
+          "amount": 12.5,
+          "currency": "USD"
+        }
+      }
 mapping:
   fields:
     - from: customer_id
       to: customer.id
       transforms:
         - type: trim
-    - from: full_name
+    - from: customer_name
       to: customer.name
       transforms:
         - type: trim
-    - expression: 'customer_id + ":" + full_name'
-      to: customer.display
+    - from: invoice_id
+      to: invoice.id
       transforms:
         - type: trim
+    - from: service_date
+      to: invoice.service_date
     - from: amount
       to: invoice.amount
       transforms:
         - type: to_float
-    - to: invoice.currency
+    - from: currency
+      to: invoice.currency
       transforms:
-        - type: default
-          value: USD
+        - type: upper
 targetSchema:
   type: object
   fields:
@@ -48,13 +64,16 @@ targetSchema:
         - name: name
           type: string
           required: true
-        - name: display
-          type: string
-          required: true
     - name: invoice
       type: object
       required: true
       fields:
+        - name: id
+          type: string
+          required: true
+        - name: service_date
+          type: string
+          required: true
         - name: amount
           type: number
           required: true

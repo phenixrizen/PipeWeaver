@@ -21,7 +21,7 @@ PipeWeaver helps teams define pipelines that:
 - Canonical record path helpers using dot notation.
 - Mapping engine with trim, case conversion, type conversion, default values, concat, CEL expressions for multi-field reads, and conditional/date scaffolds.
 - Schema inference and JSON Schema aware validation.
-- Example pipelines for CSV → JSON, XML → CSV, JSON → TSV, TSV → JSON, and pipe-delimited → XML.
+- Example pipelines for CSV → JSON, CSV → CSV, XML → CSV, JSON → TSV, TSV → JSON, and pipe-delimited → XML.
 - CLI runner for local execution and API server for UI-driven workflow testing.
 
 ## Repository layout
@@ -71,6 +71,7 @@ make build
 ## Example pipelines
 
 - `examples/pipelines/csv_http_to_json.yaml`
+- `examples/pipelines/csv_http_to_csv.yaml`
 - `examples/pipelines/xml_file_to_csv.json`
 - `examples/pipelines/csv_http_to_json_cel.yaml`
 - `examples/pipelines/json_file_to_tsv.yaml`

@@ -51,7 +51,7 @@ PipeWeaver supports optional CEL expressions in field mappings when a target val
 
 The UI also validates CEL expressions in the browser with `@marcbachmann/cel-js` so authors can catch syntax or obvious evaluation issues before sending a preview request to the backend.
 
-See `examples/pipelines` for working samples, including CSV → JSON, XML → CSV, JSON → TSV, TSV → JSON, and pipe-delimited → XML flows.
+See `examples/pipelines` for working samples, including CSV → JSON, CSV → CSV, XML → CSV, JSON → TSV, TSV → JSON, and pipe-delimited → XML flows.
 
 ### Pipeline store
 

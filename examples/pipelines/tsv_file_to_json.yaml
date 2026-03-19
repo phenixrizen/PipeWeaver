@@ -1,15 +1,29 @@
 pipeline:
   id: tsv_file_to_json
-  name: TSV file to JSON
-  description: Convert tab-delimited shipment exports into nested JSON with normalized casing.
+  name: Warehouse shipment TSV to JSON
+  description: Convert tab-delimited shipment exports into nested JSON with normalized casing for API consumers.
 source:
   type: file
   format: tsv
   config:
     path: examples/inputs/shipments.tsv
+    samplePayload: |
+      shipment_id	warehouse	status	priority
+      S-100	East	ready	high
+      S-101	West	packed	medium
 target:
   type: stdout
   format: json
+  config:
+    sampleOutput: |
+      {
+        "shipment": {
+          "id": "S-100",
+          "location": "east",
+          "status": "READY",
+          "priority": "high"
+        }
+      }
 mapping:
   fields:
     - from: shipment_id

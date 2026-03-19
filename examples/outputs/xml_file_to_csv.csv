@@ -1,0 +1,2 @@
+claim_id,claimant_name,member_id,plan_name,procedure_codes,claim_status,received_at,total_billed,currency
+CLM-2026-00045,Bob Stone,M-10045,Gold PPO,12345 | 67890,PENDING REVIEW,2026-03-18T09:15:00Z,184.22,USD

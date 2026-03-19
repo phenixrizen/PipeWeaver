@@ -1,0 +1,104 @@
+pipeline:
+  id: csv_http_to_csv
+  name: CSV HTTP to CSV
+  description: Clean and reshape posted CSV rows into a flat CSV export.
+source:
+  type: http
+  format: csv
+  config:
+    samplePayload: |
+      customer_id,first_name,last_name,preferred_name,region,postal_code,status
+      1001, Ada ,Lovelace,,na,78701-1234,review_needed
+      1002,Grace,Hopper,Amazing Grace,eu,10001-9999,ready_to_send
+target:
+  type: stdout
+  format: csv
+  config:
+    sampleOutput: |
+      customer_id,full_name,display_name,region_code,postal_prefix,batch_key,status_label
+      1001,Ada Lovelace,Ada,NA,78701,CUST-1001,REVIEW NEEDED
+      1002,Grace Hopper,Amazing Grace,EU,10001,CUST-1002,READY TO SEND
+mapping:
+  fields:
+    - from: customer_id
+      to: customer_id
+      transforms:
+        - type: trim
+    - from: first_name
+      to: full_name
+      transforms:
+        - type: concat
+          value: " "
+          values:
+            - last_name
+        - type: normalize_whitespace
+    - from: preferred_name
+      to: display_name
+      transforms:
+        - type: coalesce
+          values:
+            - first_name
+            - last_name
+    - from: region
+      to: region_code
+      transforms:
+        - type: trim
+        - type: upper
+    - from: postal_code
+      to: postal_prefix
+      transforms:
+        - type: substring
+          values:
+            - "0"
+            - "5"
+    - from: customer_id
+      to: batch_key
+      transforms:
+        - type: prefix
+          value: "CUST-"
+    - from: status
+      to: status_label
+      transforms:
+        - type: replace
+          values:
+            - "_"
+            - " "
+        - type: upper
+targetSchema:
+  type: object
+  fields:
+    - name: customer_id
+      type: string
+      required: true
+      column: customer_id
+      index: 0
+    - name: full_name
+      type: string
+      required: true
+      column: full_name
+      index: 1
+    - name: display_name
+      type: string
+      required: true
+      column: display_name
+      index: 2
+    - name: region_code
+      type: string
+      required: true
+      column: region_code
+      index: 3
+    - name: postal_prefix
+      type: string
+      required: true
+      column: postal_prefix
+      index: 4
+    - name: batch_key
+      type: string
+      required: true
+      column: batch_key
+      index: 5
+    - name: status_label
+      type: string
+      required: true
+      column: status_label
+      index: 6

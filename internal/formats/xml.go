@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"io"
+	"sort"
 	"strings"
 )
 
@@ -14,37 +14,66 @@ type XMLDecoder struct{}
 
 // Decode handles either a single root object or a collection of repeated child elements.
 func (d XMLDecoder) Decode(_ context.Context, payload []byte) ([]Record, error) {
-	decoder := xml.NewDecoder(bytes.NewReader(payload))
-	stack := []string{}
-	record := Record{}
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("decode xml: %w", err)
-		}
-
-		switch typed := token.(type) {
-		case xml.StartElement:
-			stack = append(stack, typed.Name.Local)
-		case xml.EndElement:
-			if len(stack) > 0 {
-				stack = stack[:len(stack)-1]
-			}
-		case xml.CharData:
-			value := strings.TrimSpace(string(typed))
-			if value == "" || len(stack) < 2 {
-				continue
-			}
-			path := strings.Join(stack[1:], ".")
-			if err := SetPath(record, path, value); err != nil {
-				return nil, err
-			}
-		}
+	root := xmlNode{}
+	if err := xml.Unmarshal(payload, &root); err != nil {
+		return nil, fmt.Errorf("decode xml: %w", err)
 	}
-	return []Record{record}, nil
+
+	if len(root.Children) == 0 {
+		value := strings.TrimSpace(root.Content)
+		if value == "" {
+			return []Record{{}}, nil
+		}
+		return []Record{{root.XMLName.Local: value}}, nil
+	}
+
+	return []Record{nodeChildrenToRecord(root.Children)}, nil
+}
+
+type xmlNode struct {
+	XMLName  xml.Name  `xml:""`
+	Content  string    `xml:",chardata"`
+	Children []xmlNode `xml:",any"`
+}
+
+func nodeChildrenToRecord(children []xmlNode) Record {
+	values := groupChildValues(children)
+	record := Record{}
+	for key, value := range values {
+		record[key] = value
+	}
+	return record
+}
+
+func groupChildValues(children []xmlNode) map[string]any {
+	grouped := make(map[string][]any)
+	order := make([]string, 0)
+
+	for _, child := range children {
+		name := child.XMLName.Local
+		if _, exists := grouped[name]; !exists {
+			order = append(order, name)
+		}
+		grouped[name] = append(grouped[name], nodeToValue(child))
+	}
+
+	values := make(map[string]any, len(grouped))
+	for _, name := range order {
+		items := grouped[name]
+		if len(items) == 1 {
+			values[name] = items[0]
+			continue
+		}
+		values[name] = items
+	}
+	return values
+}
+
+func nodeToValue(node xmlNode) any {
+	if len(node.Children) == 0 {
+		return strings.TrimSpace(node.Content)
+	}
+	return groupChildValues(node.Children)
 }
 
 // XMLEncoder writes a simple XML document from canonical records.
@@ -69,15 +98,59 @@ func (e XMLEncoder) Encode(_ context.Context, records []Record) ([]byte, error) 
 	buffer.WriteString("<" + root + ">")
 	for _, record := range records {
 		buffer.WriteString("<" + item + ">")
-		for key, value := range record {
-			buffer.WriteString("<" + key + ">")
-			if err := xml.EscapeText(buffer, []byte(fmt.Sprint(value))); err != nil {
-				return nil, fmt.Errorf("escape xml text: %w", err)
-			}
-			buffer.WriteString("</" + key + ">")
+		if err := encodeXMLMap(buffer, map[string]any(record)); err != nil {
+			return nil, err
 		}
 		buffer.WriteString("</" + item + ">")
 	}
 	buffer.WriteString("</" + root + ">")
 	return buffer.Bytes(), nil
+}
+
+func encodeXMLMap(buffer *bytes.Buffer, values map[string]any) error {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if err := encodeXMLValue(buffer, key, values[key]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func encodeXMLValue(buffer *bytes.Buffer, key string, value any) error {
+	switch typed := value.(type) {
+	case Record:
+		buffer.WriteString("<" + key + ">")
+		if err := encodeXMLMap(buffer, map[string]any(typed)); err != nil {
+			return err
+		}
+		buffer.WriteString("</" + key + ">")
+		return nil
+	case map[string]any:
+		buffer.WriteString("<" + key + ">")
+		if err := encodeXMLMap(buffer, typed); err != nil {
+			return err
+		}
+		buffer.WriteString("</" + key + ">")
+		return nil
+	case []any:
+		for _, item := range typed {
+			if err := encodeXMLValue(buffer, key, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		buffer.WriteString("<" + key + ">")
+		if err := xml.EscapeText(buffer, []byte(fmt.Sprint(value))); err != nil {
+			return fmt.Errorf("escape xml text: %w", err)
+		}
+		buffer.WriteString("</" + key + ">")
+		return nil
+	}
 }

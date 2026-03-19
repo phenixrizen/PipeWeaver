@@ -5,7 +5,7 @@ defineProps<{ compact?: boolean }>();
 <template>
   <div class="flex items-center gap-3">
     <div
-      class="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-violet-600 via-fuchsia-500 to-cyan-400 text-white shadow-lg shadow-violet-500/20"
+      class="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-sky-600 via-sky-500 to-cyan-400 text-white shadow-lg shadow-sky-500/20"
       :class="compact ? 'h-10 w-10 rounded-xl' : ''"
     >
       <svg
@@ -42,7 +42,7 @@ defineProps<{ compact?: boolean }>();
     </div>
     <div>
       <p
-        class="text-xs font-semibold uppercase tracking-[0.28em] text-violet-500"
+        class="text-xs font-semibold uppercase tracking-[0.28em] text-sky-500"
       >
         PipeWeaver
       </p>

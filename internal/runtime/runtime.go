@@ -3,12 +3,14 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/phenixrizen/PipeWeaver/internal/connectors"
 	"github.com/phenixrizen/PipeWeaver/internal/formats"
 	"github.com/phenixrizen/PipeWeaver/internal/mapping"
 	"github.com/phenixrizen/PipeWeaver/internal/pipeline"
+	"github.com/phenixrizen/PipeWeaver/internal/schema"
 )
 
 // PreviewResult packages runtime output for API responses and CLI summaries.
@@ -58,13 +60,46 @@ func (e Executor) RunPreview(ctx context.Context, definition pipeline.Definition
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("decode input: %w", err)
 	}
-	mapped, err := mapping.Apply(definition.Mapping, inputRecords, definition.TargetSchema)
+	mapped, err := mapping.Apply(
+		definition.Mapping,
+		inputRecords,
+		definition.TargetSchema,
+		buildMappingOptions(definition),
+	)
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("apply mapping: %w", err)
 	}
-	encoder, err := formats.NewEncoder(definition.Target.Format)
-	if err != nil {
-		return PreviewResult{}, err
+	var encoder formats.Encoder
+	switch strings.ToLower(definition.Target.Format) {
+	case "xml":
+		itemName := "record"
+		if definition.TargetSchema != nil && definition.TargetSchema.Name != "" {
+			itemName = definition.TargetSchema.Name
+		}
+		encoder = formats.XMLEncoder{
+			RootName: "records",
+			ItemName: itemName,
+		}
+	case "csv":
+		encoder = formats.DelimitedEncoder{
+			Delimiter: ',',
+			Columns:   buildDelimitedColumns(definition.TargetSchema),
+		}
+	case "tsv":
+		encoder = formats.DelimitedEncoder{
+			Delimiter: '\t',
+			Columns:   buildDelimitedColumns(definition.TargetSchema),
+		}
+	case "pipe", "pipe-delimited":
+		encoder = formats.DelimitedEncoder{
+			Delimiter: '|',
+			Columns:   buildDelimitedColumns(definition.TargetSchema),
+		}
+	default:
+		encoder, err = formats.NewEncoder(definition.Target.Format)
+		if err != nil {
+			return PreviewResult{}, err
+		}
 	}
 	encoded, err := encoder.Encode(ctx, mapped.Records)
 	if err != nil {
@@ -77,4 +112,56 @@ func (e Executor) RunPreview(ctx context.Context, definition pipeline.Definition
 		ValidationErrors: mapped.ValidationErrors,
 		DurationMS:       time.Since(started).Milliseconds(),
 	}, nil
+}
+
+func buildMappingOptions(definition pipeline.Definition) mapping.ApplyOptions {
+	options := mapping.ApplyOptions{
+		DefaultRepeatMode:    "preserve",
+		DefaultJoinDelimiter: ", ",
+		TargetFormat:         definition.Target.Format,
+	}
+
+	if definition.Source.Config == nil {
+		return options
+	}
+
+	if mode, ok := definition.Source.Config["xmlRepeatedElementsMode"].(string); ok && strings.TrimSpace(mode) != "" {
+		options.DefaultRepeatMode = mode
+	}
+	if delimiter, ok := definition.Source.Config["arrayJoinDelimiter"].(string); ok && strings.TrimSpace(delimiter) != "" {
+		options.DefaultJoinDelimiter = delimiter
+	}
+
+	return options
+}
+
+func buildDelimitedColumns(definition *schema.Definition) []formats.DelimitedColumn {
+	if definition == nil {
+		return nil
+	}
+
+	columns := []formats.DelimitedColumn{}
+	var walk func(fields []schema.Field, prefix string)
+	walk = func(fields []schema.Field, prefix string) {
+		for _, field := range fields {
+			key := field.Name
+			if prefix != "" {
+				key = prefix + "." + field.Name
+			}
+			if field.Type == schema.TypeObject && len(field.Fields) > 0 {
+				walk(field.Fields, key)
+				continue
+			}
+			header := field.Column
+			if header == "" {
+				header = key
+			}
+			columns = append(columns, formats.DelimitedColumn{
+				Key:    key,
+				Header: header,
+			})
+		}
+	}
+	walk(definition.Fields, "")
+	return columns
 }

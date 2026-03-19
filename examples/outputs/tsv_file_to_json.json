@@ -1,0 +1,8 @@
+{
+  "shipment": {
+    "id": "S-100",
+    "location": "east",
+    "status": "READY",
+    "priority": "high"
+  }
+}

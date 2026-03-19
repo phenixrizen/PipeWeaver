@@ -79,6 +79,34 @@ func validateFields(prefix string, fields []Field, source map[string]any) []Vali
 			continue
 		}
 
+		if field.Type == TypeArray {
+			items, ok := value.([]any)
+			if !ok {
+				errors = append(errors, ValidationError{Path: path, Message: "expected array"})
+				continue
+			}
+			if len(field.Fields) > 0 {
+				for index, item := range items {
+					nested, ok := item.(map[string]any)
+					if !ok {
+						if recordValue, recordOK := item.(formats.Record); recordOK {
+							nested = map[string]any(recordValue)
+							ok = true
+						}
+					}
+					if !ok {
+						errors = append(errors, ValidationError{
+							Path:    fmt.Sprintf("%s[%d]", path, index),
+							Message: "expected object item",
+						})
+						continue
+					}
+					errors = append(errors, validateFields(fmt.Sprintf("%s[%d]", path, index), field.Fields, nested)...)
+				}
+			}
+			continue
+		}
+
 		if field.Type == TypeObject {
 			nested, ok := value.(map[string]any)
 			if !ok {

@@ -5,7 +5,7 @@ defineProps<{ title: string; message: string }>();
 <template>
   <div class="panel flex flex-col items-start gap-4 p-8">
     <div
-      class="rounded-2xl bg-violet-50 px-4 py-2 text-sm font-medium text-violet-600"
+      class="rounded-2xl bg-sky-50 px-4 py-2 text-sm font-medium text-sky-600"
     >
       {{ title }}
     </div>

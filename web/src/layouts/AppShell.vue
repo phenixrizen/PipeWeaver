@@ -1,33 +1,40 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useRoute } from "vue-router";
 import AppHeader from "../components/AppHeader.vue";
-import SidebarNav from "../components/SidebarNav.vue";
+import { usePipelineStore } from "../stores/pipelines";
 
-const sidebarOpen = ref(false);
 const route = useRoute();
+const store = usePipelineStore();
 const isWideContent = computed(() => route.meta.wideContent === true);
+const currentPipelineTitle = computed(() => {
+  if (!["pipeline-new", "pipeline-edit"].includes(String(route.name ?? ""))) {
+    return "";
+  }
+
+  const liveName = store.current.pipeline.name?.trim();
+  if (liveName) {
+    return liveName;
+  }
+
+  if (typeof route.params.id === "string" && route.params.id.length > 0) {
+    return route.params.id;
+  }
+
+  return "New pipeline";
+});
 </script>
 
 <template>
-  <div class="flex h-screen overflow-hidden bg-gray-100 text-gray-900">
-    <SidebarNav :open="sidebarOpen" @close="sidebarOpen = false" />
-
-    <div
-      class="relative flex flex-1 flex-col overflow-y-auto overflow-x-hidden"
-    >
-      <AppHeader
-        :sidebar-open="sidebarOpen"
-        @toggle-sidebar="sidebarOpen = !sidebarOpen"
-      />
-      <main class="grow">
-        <div
-          class="mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
-          :class="isWideContent ? 'max-w-[1800px]' : 'max-w-[1440px]'"
-        >
-          <slot />
-        </div>
-      </main>
-    </div>
+  <div class="min-h-screen bg-transparent text-gray-900">
+    <AppHeader :current-pipeline-title="currentPipelineTitle" />
+    <main class="grow">
+      <div
+        class="mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
+        :class="isWideContent ? 'max-w-none md:w-[90%]' : 'max-w-[1440px]'"
+      >
+        <slot />
+      </div>
+    </main>
   </div>
 </template>

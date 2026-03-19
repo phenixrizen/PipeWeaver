@@ -8,7 +8,7 @@ defineProps<{ title: string; description: string }>();
   >
     <div>
       <p
-        class="text-xs font-semibold uppercase tracking-[0.28em] text-violet-500"
+        class="text-xs font-semibold uppercase tracking-[0.28em] text-sky-500"
       >
         PipeWeaver workspace
       </p>
