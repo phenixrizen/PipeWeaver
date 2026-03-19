@@ -3,7 +3,13 @@ import type {
   PipelineDefinition,
   SchemaDefinition,
 } from "../types/pipeline";
-import { inferSourceFields, isTabularFormat } from "./schema";
+import {
+  flattenSchemaLeafOptions,
+  inferSourceFields,
+  isTabularFormat,
+  rankTargetMatches,
+  type TargetMatchResolution,
+} from "./schema";
 
 export type AiDraftMode =
   | "studio"
@@ -27,6 +33,27 @@ export interface AiModelOption {
   vramLabel: string;
   dropdownLabel: string;
   note: string;
+  contextWindowSize: number;
+}
+
+export interface AiPromptBuildResult {
+  prompt: string;
+  promptMode: "full" | "compact" | "unfit";
+  estimatedPromptTokens: number;
+  effectiveMaxTokens: number;
+  statusNote: string;
+  shouldMergeMappings: boolean;
+  lockedMappingTargets: string[];
+  batches: AiPromptBatch[];
+}
+
+export interface AiPromptBatch {
+  prompt: string;
+  estimatedPromptTokens: number;
+  effectiveMaxTokens: number;
+  batchIndex: number;
+  totalBatches: number;
+  unresolvedTargetCount: number;
 }
 
 export const aiModelOptions = [
@@ -38,6 +65,7 @@ export const aiModelOptions = [
     vramLabel: "~5.0 GB VRAM",
     dropdownLabel: "Llama 3.1 · 8B · ~5.0 GB VRAM",
     note: "Primary local reasoning model for schema and mapping drafts.",
+    contextWindowSize: 4096,
   },
   {
     id: "Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC",
@@ -47,6 +75,7 @@ export const aiModelOptions = [
     vramLabel: "~5.0 GB VRAM",
     dropdownLabel: "Hermes 2 Pro Llama 3 · 8B · ~5.0 GB VRAM",
     note: "Best alternate for stronger instruction following and mapping polish.",
+    contextWindowSize: 4096,
   },
   {
     id: "NeuralHermes-2.5-Mistral-7B-q4f16_1-MLC",
@@ -56,6 +85,7 @@ export const aiModelOptions = [
     vramLabel: "~4.6 GB VRAM",
     dropdownLabel: "NeuralHermes 2.5 Mistral · 7B · ~4.6 GB VRAM",
     note: "Lighter secondary option when 8B startup cost is too high.",
+    contextWindowSize: 4096,
   },
   {
     id: "Phi-3.5-mini-instruct-q4f16_1-MLC",
@@ -65,6 +95,7 @@ export const aiModelOptions = [
     vramLabel: "~3.7 GB VRAM",
     dropdownLabel: "Phi 3.5 · Mini · ~3.7 GB VRAM",
     note: "Most efficient option when you need smaller local memory use.",
+    contextWindowSize: 4096,
   },
 ] as const satisfies readonly AiModelOption[];
 
@@ -238,6 +269,30 @@ ${sourceFields.map((field) => `  - ${field.path} (${field.type})`).join("\n")}
 - Prefer direct source field paths over CEL expressions unless the mapping truly needs composition or logic.`;
 };
 
+const describeCompactSourceShape = (
+  pipeline: PipelineDefinition,
+  samplePayload: string,
+) => {
+  const sourceFields = inferSourceFields(pipeline.source.format, samplePayload);
+
+  if (!sourceFields.length) {
+    return `Source format: ${pipeline.source.format}
+- No inferred source fields were available from the sample payload.
+- Use the provided sample excerpt directly and keep assumptions explicit.`;
+  }
+
+  const limitedFields = sourceFields.slice(0, 30);
+  const truncatedCount = sourceFields.length - limitedFields.length;
+  const sourcePathPrefix = sharedPathPrefix(sourceFields.map((field) => field.path));
+
+  return `Source format: ${pipeline.source.format}
+- Common source path prefix: ${sourcePathPrefix || "(none)"}
+- Use these inferred source field paths when drafting mappings:
+${limitedFields.map((field) => `  - ${abbreviatePath(field.path, sourcePathPrefix)} (${field.type})`).join("\n")}
+${truncatedCount > 0 ? `- ${truncatedCount} additional source fields were omitted for compact mode.` : ""}
+- Prefer direct source field paths over CEL expressions unless the mapping truly needs composition or logic.`;
+};
+
 const buildModeInstruction = (
   mode: AiDraftMode,
   pipeline: PipelineDefinition,
@@ -301,6 +356,526 @@ export const buildAiPrompt = (options: {
     authorPrompt ||
       "Use the sample payload to infer realistic output fields and keep the result production-friendly.",
   ].join("\n\n");
+};
+
+const minOutputTokens = 256;
+const promptSafetyMarginTokens = 384;
+const compactPromptCharThreshold = 8000;
+const rawSampleCharThreshold = 3000;
+const maxCompactExcerptChars = 900;
+const maxCompactTargetsPerBatch = 32;
+
+const estimatePromptTokens = (prompt: string) =>
+  Math.max(1, Math.ceil(prompt.length / 3));
+
+const computeEffectiveMaxTokens = (
+  requestedMaxTokens: number,
+  estimatedPromptTokens: number,
+  contextWindowSize: number,
+) =>
+  Math.max(
+    minOutputTokens,
+    Math.min(
+      requestedMaxTokens,
+      contextWindowSize - estimatedPromptTokens - promptSafetyMarginTokens,
+    ),
+  );
+
+const canFitPrompt = (
+  estimatedPromptTokens: number,
+  contextWindowSize: number,
+) =>
+  estimatedPromptTokens + minOutputTokens + promptSafetyMarginTokens <=
+  contextWindowSize;
+
+const truncateText = (value: string, maxChars: number) => {
+  const normalized = value.trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, maxChars - 19)).trimEnd()}\n...[truncated]`;
+};
+
+const sharedPathPrefix = (paths: string[]) => {
+  const segmentedPaths = paths
+    .filter((path) => path.trim().length > 0)
+    .map((path) => path.split("."));
+  if (!segmentedPaths.length) {
+    return "";
+  }
+
+  const prefix: string[] = [];
+  for (let index = 0; index < segmentedPaths[0].length; index += 1) {
+    const segment = segmentedPaths[0][index];
+    if (
+      segmentedPaths.some((pathSegments) => pathSegments[index] !== segment)
+    ) {
+      break;
+    }
+    prefix.push(segment);
+  }
+
+  return prefix.join(".");
+};
+
+const abbreviatePath = (path: string, prefix: string) =>
+  prefix && path.startsWith(`${prefix}.`)
+    ? path.slice(prefix.length + 1)
+    : path;
+
+const summarizeTabularSample = (
+  format: string,
+  sample: string,
+  rowLimit = 2,
+  columnLimit = 12,
+) => {
+  const delimiter =
+    format === "tsv" ? "\t" : format === "pipe" ? "|" : ",";
+  const lines = sample
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (!lines.length) {
+    return "";
+  }
+
+  const headers = lines[0]
+    .split(delimiter)
+    .map((header) => header.trim())
+    .filter(Boolean);
+  const visibleHeaders = headers.slice(0, columnLimit);
+  const omittedColumns = headers.length - visibleHeaders.length;
+  const visibleRows = lines.slice(1, rowLimit + 1).map((line) => {
+    const values = line.split(delimiter);
+    return visibleHeaders
+      .map((header, index) => `${header}=${values[index]?.trim() ?? ""}`)
+      .join(" | ");
+  });
+
+  return [
+    `Columns (${headers.length} total): ${visibleHeaders.join(", ")}${omittedColumns > 0 ? ` ...[${omittedColumns} more omitted]` : ""}`,
+    ...visibleRows,
+  ].join("\n");
+};
+
+const summarizeStructuredSample = (sample: string) =>
+  truncateText(sample, maxCompactExcerptChars);
+
+const summarizeConfigForPrompt = (config: Record<string, unknown>) =>
+  Object.fromEntries(
+    Object.entries(config)
+      .filter(([key]) => !["samplePayload", "sampleOutput"].includes(key))
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? truncateText(value, 120) : value,
+      ]),
+  );
+
+const summarizeSampleForPrompt = (format: string, sample: string) => {
+  const trimmed = sample.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (isTabularFormat(format)) {
+    return summarizeTabularSample(format, trimmed);
+  }
+
+  return summarizeStructuredSample(trimmed);
+};
+
+const formatAppliedMappings = (
+  mappings: FieldMapping[],
+  maxItems = 24,
+) => {
+  if (!mappings.length) {
+    return "- None yet.";
+  }
+
+  return mappings
+    .slice(0, maxItems)
+    .map((mapping) => {
+      const source = mapping.from?.trim() || mapping.expression?.trim() || "(derived)";
+      return `- ${source} -> ${mapping.to}`;
+    })
+    .join("\n");
+};
+
+const collectUnresolvedTargetCandidates = (
+  pipeline: PipelineDefinition,
+  samplePayload: string,
+) => {
+  const sourceFields = inferSourceFields(pipeline.source.format, samplePayload);
+  const targetFields = flattenSchemaLeafOptions(pipeline.targetSchema?.fields);
+  const lockedTargets = new Set(
+    pipeline.mapping.fields
+      .map((mapping) => mapping.to)
+      .filter((target): target is string => Boolean(target)),
+  );
+
+  return rankTargetMatches(sourceFields, targetFields).filter(
+    (resolution) => !lockedTargets.has(resolution.target),
+  );
+};
+
+const formatUnresolvedTargetCandidates = (
+  resolutions: TargetMatchResolution[],
+  sourcePathPrefix = "",
+) => {
+  if (!resolutions.length) {
+    return "- No unresolved target paths remain.";
+  }
+
+  return resolutions
+    .map((resolution) => {
+      const candidates = resolution.candidates.length
+        ? resolution.candidates
+            .slice(0, 2)
+            .map(
+              (candidate) =>
+                `${abbreviatePath(candidate.source, sourcePathPrefix)} (${candidate.type})`,
+            )
+            .join("; ")
+        : "no strong local candidates";
+      return `- ${resolution.target} [${resolution.targetType}] :: ${candidates}`;
+    })
+    .join("\n");
+};
+
+const buildCompactAiPrompt = (options: {
+  mode: AiDraftMode;
+  pipeline: PipelineDefinition;
+  samplePayload: string;
+  sampleOutput?: string;
+  authorPrompt: string;
+  unresolvedTargetCandidates?: TargetMatchResolution[];
+  batchIndex?: number;
+  totalBatches?: number;
+}) => {
+  const {
+    mode,
+    pipeline,
+    samplePayload,
+    sampleOutput,
+    authorPrompt,
+    unresolvedTargetCandidates = [],
+    batchIndex = 1,
+    totalBatches = 1,
+  } = options;
+  const hasLockedMappings = pipeline.mapping.fields.length > 0;
+  const mappingFocusedMode = mode === "studio" || mode === "mapping";
+  const sourcePathPrefix = sharedPathPrefix(
+    inferSourceFields(pipeline.source.format, samplePayload).map((field) => field.path),
+  );
+  const batchLabel =
+    totalBatches > 1
+      ? `This request resolves mapping batch ${batchIndex} of ${totalBatches}. Only emit mappingFields for the unresolved targets listed in this batch.`
+      : "";
+  const compactInstructions = !isStructuredAiMode(mode)
+    ? "Compact mode is active because the raw samples were too large for local model context. Base the explanation on the summarized structure and examples below."
+    : mappingFocusedMode
+      ? [
+          "Compact mode is active because the raw samples were too large for local model context.",
+          batchLabel,
+          hasLockedMappings
+            ? "Treat the existing mappings as locked. Only emit mappingFields for unresolved targets listed below."
+            : "Use the candidate source suggestions for unresolved targets when emitting mappingFields.",
+          "Prefer the provided candidate sources over inventing CEL expressions.",
+        ].join("\n")
+      : "Compact mode is active because the raw samples were too large for local model context. Use the summarized structure and examples below to draft the requested result.";
+
+  return [
+    `Task: ${aiModeLabels[mode]}`,
+    buildModeInstruction(mode, pipeline, sampleOutput),
+    compactInstructions,
+    describeCompactSourceShape(pipeline, samplePayload),
+    isStructuredAiMode(mode) ? structuredResponseRules : explainResponseRules,
+    "Pipeline summary:",
+    JSON.stringify(
+      {
+        pipeline: pipeline.pipeline,
+        source: {
+          type: pipeline.source.type,
+          format: pipeline.source.format,
+          config: summarizeConfigForPrompt(pipeline.source.config),
+        },
+        target: {
+          type: pipeline.target.type,
+          format: pipeline.target.format,
+          config: summarizeConfigForPrompt(pipeline.target.config),
+        },
+        targetSchemaFieldCount: flattenSchemaLeafOptions(pipeline.targetSchema?.fields).length,
+        existingMappingCount: pipeline.mapping.fields.length,
+      },
+      null,
+      2,
+    ),
+    ...(mappingFocusedMode
+      ? [
+          "Locked mappings:",
+          formatAppliedMappings(pipeline.mapping.fields),
+          `Candidate source paths omit this common prefix when possible: ${sourcePathPrefix || "(none)"}`,
+          "Unresolved target candidates:",
+          formatUnresolvedTargetCandidates(
+            unresolvedTargetCandidates,
+            sourcePathPrefix,
+          ),
+        ]
+      : []),
+    "Source sample excerpt:",
+    summarizeSampleForPrompt(pipeline.source.format, samplePayload),
+    ...(sampleOutput?.trim()
+      ? [
+          "Target sample excerpt:",
+          summarizeSampleForPrompt(pipeline.target.format, sampleOutput),
+        ]
+      : []),
+    "Operator instructions:",
+    truncateText(
+      authorPrompt ||
+        "Use the sample payload to infer realistic output fields and keep the result production-friendly.",
+      600,
+    ),
+  ]
+    .filter((section) => section.trim().length > 0)
+    .join("\n\n");
+};
+
+const buildCompactAiBatches = (options: {
+  mode: AiDraftMode;
+  pipeline: PipelineDefinition;
+  samplePayload: string;
+  sampleOutput?: string;
+  authorPrompt: string;
+  requestedMaxTokens: number;
+  contextWindowSize: number;
+}) => {
+  const {
+    mode,
+    pipeline,
+    samplePayload,
+    sampleOutput,
+    authorPrompt,
+    requestedMaxTokens,
+    contextWindowSize,
+  } = options;
+  const mappingFocusedMode = mode === "studio" || mode === "mapping";
+  const unresolvedTargetCandidates = mappingFocusedMode
+    ? collectUnresolvedTargetCandidates(pipeline, samplePayload)
+    : [];
+
+  if (!mappingFocusedMode || unresolvedTargetCandidates.length === 0) {
+    const prompt = buildCompactAiPrompt({
+      mode,
+      pipeline,
+      samplePayload,
+      sampleOutput,
+      authorPrompt,
+    });
+    const estimatedPromptTokens = estimatePromptTokens(prompt);
+
+    return {
+      unresolvedTargetCount: unresolvedTargetCandidates.length,
+      batches: [
+        {
+          prompt,
+          estimatedPromptTokens,
+          effectiveMaxTokens: computeEffectiveMaxTokens(
+            requestedMaxTokens,
+            estimatedPromptTokens,
+            contextWindowSize,
+          ),
+          batchIndex: 1,
+          totalBatches: 1,
+          unresolvedTargetCount: unresolvedTargetCandidates.length,
+        },
+      ] satisfies AiPromptBatch[],
+    };
+  }
+
+  const batchSlices: TargetMatchResolution[][] = [];
+  let lastAttemptedPrompt = "";
+
+  for (let index = 0; index < unresolvedTargetCandidates.length;) {
+    let end = Math.min(
+      unresolvedTargetCandidates.length,
+      index + maxCompactTargetsPerBatch,
+    );
+    let selectedSlice: TargetMatchResolution[] | undefined;
+
+    while (end > index) {
+      const slice = unresolvedTargetCandidates.slice(index, end);
+      const prompt = buildCompactAiPrompt({
+        mode,
+        pipeline,
+        samplePayload,
+        sampleOutput,
+        authorPrompt,
+        unresolvedTargetCandidates: slice,
+        batchIndex: 88,
+        totalBatches: 88,
+      });
+      lastAttemptedPrompt = prompt;
+
+      if (canFitPrompt(estimatePromptTokens(prompt), contextWindowSize)) {
+        selectedSlice = slice;
+        break;
+      }
+
+      end -= 1;
+    }
+
+    if (!selectedSlice) {
+      return {
+        unresolvedTargetCount: unresolvedTargetCandidates.length,
+        batches: [] satisfies AiPromptBatch[],
+        unfitPrompt: lastAttemptedPrompt,
+      };
+    }
+
+    batchSlices.push(selectedSlice);
+    index += selectedSlice.length;
+  }
+
+  const totalBatches = batchSlices.length;
+  const batches = batchSlices.map<AiPromptBatch>((slice, batchOffset) => {
+    const prompt = buildCompactAiPrompt({
+      mode,
+      pipeline,
+      samplePayload,
+      sampleOutput,
+      authorPrompt,
+      unresolvedTargetCandidates: slice,
+      batchIndex: batchOffset + 1,
+      totalBatches,
+    });
+    const estimatedPromptTokens = estimatePromptTokens(prompt);
+
+    return {
+      prompt,
+      estimatedPromptTokens,
+      effectiveMaxTokens: computeEffectiveMaxTokens(
+        requestedMaxTokens,
+        estimatedPromptTokens,
+        contextWindowSize,
+      ),
+      batchIndex: batchOffset + 1,
+      totalBatches,
+      unresolvedTargetCount: slice.length,
+    };
+  });
+
+  return {
+    unresolvedTargetCount: unresolvedTargetCandidates.length,
+    batches,
+  };
+};
+
+export const buildAiRequest = (options: {
+  mode: AiDraftMode;
+  pipeline: PipelineDefinition;
+  samplePayload: string;
+  sampleOutput?: string;
+  authorPrompt: string;
+  requestedMaxTokens: number;
+  contextWindowSize: number;
+}): AiPromptBuildResult => {
+  const {
+    mode,
+    pipeline,
+    samplePayload,
+    sampleOutput,
+    authorPrompt,
+    requestedMaxTokens,
+    contextWindowSize,
+  } = options;
+
+  const fullPrompt = buildAiPrompt({
+    mode,
+    pipeline,
+    samplePayload,
+    sampleOutput,
+    authorPrompt,
+  });
+  const estimatedFullTokens = estimatePromptTokens(fullPrompt);
+  const fullCanFit = canFitPrompt(estimatedFullTokens, contextWindowSize);
+  const shouldCompact =
+    !fullCanFit ||
+    fullPrompt.length > compactPromptCharThreshold ||
+    samplePayload.trim().length > rawSampleCharThreshold ||
+    (sampleOutput?.trim().length ?? 0) > rawSampleCharThreshold;
+
+  if (!shouldCompact) {
+    const effectiveMaxTokens = computeEffectiveMaxTokens(
+      requestedMaxTokens,
+      estimatedFullTokens,
+      contextWindowSize,
+    );
+    return {
+      prompt: fullPrompt,
+      promptMode: "full",
+      estimatedPromptTokens: estimatedFullTokens,
+      effectiveMaxTokens,
+      statusNote: "Using the full local prompt.",
+      shouldMergeMappings: false,
+      lockedMappingTargets: [],
+      batches: [
+        {
+          prompt: fullPrompt,
+          estimatedPromptTokens: estimatedFullTokens,
+          effectiveMaxTokens,
+          batchIndex: 1,
+          totalBatches: 1,
+          unresolvedTargetCount: 0,
+        },
+      ],
+    };
+  }
+
+  const compactResult = buildCompactAiBatches({
+    mode,
+    pipeline,
+    samplePayload,
+    sampleOutput,
+    authorPrompt,
+    requestedMaxTokens,
+    contextWindowSize,
+  });
+  const firstCompactBatch = compactResult.batches[0];
+
+  if (!firstCompactBatch || compactResult.batches.some((batch) => !canFitPrompt(batch.estimatedPromptTokens, contextWindowSize))) {
+    return {
+      prompt: compactResult.unfitPrompt ?? "",
+      promptMode: "unfit",
+      estimatedPromptTokens: compactResult.unfitPrompt
+        ? estimatePromptTokens(compactResult.unfitPrompt)
+        : estimatedFullTokens,
+      effectiveMaxTokens: minOutputTokens,
+      statusNote:
+        "Even the compact local prompt would exceed the current model context. Keeping the deterministic draft only.",
+      shouldMergeMappings: false,
+      lockedMappingTargets: pipeline.mapping.fields.map((mapping) => mapping.to),
+      batches: [],
+    };
+  }
+
+  return {
+    prompt: firstCompactBatch.prompt,
+    promptMode: "compact",
+    estimatedPromptTokens: firstCompactBatch.estimatedPromptTokens,
+    effectiveMaxTokens: firstCompactBatch.effectiveMaxTokens,
+    statusNote:
+      compactResult.batches.length > 1
+        ? `Compacted the request into ${compactResult.batches.length} local batches covering ${compactResult.unresolvedTargetCount} unresolved targets.`
+        : firstCompactBatch.effectiveMaxTokens < requestedMaxTokens
+          ? `Compacted the request to local summaries and candidate matches. Reduced the response budget to ${firstCompactBatch.effectiveMaxTokens} tokens to stay within the local context window.`
+          : "Compacted the request to local summaries and candidate matches to stay within the local context window.",
+    shouldMergeMappings: isStructuredAiMode(mode) && ["studio", "mapping"].includes(mode),
+    lockedMappingTargets: pipeline.mapping.fields.map((mapping) => mapping.to),
+    batches: compactResult.batches,
+  };
 };
 
 export const defaultAiInstruction = (

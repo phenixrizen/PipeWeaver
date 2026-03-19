@@ -1,5 +1,6 @@
 import {
   aiModelOptions,
+  buildAiRequest,
   buildAiPrompt,
   defaultAiInstruction,
   normalizeStructuredAiResponseText,
@@ -132,5 +133,93 @@ describe("ai helpers", () => {
       "NeuralHermes-2.5-Mistral-7B-q4f16_1-MLC",
       "Phi-3.5-mini-instruct-q4f16_1-MLC",
     ]);
+  });
+
+  it("switches large requests into compact mode with unresolved target candidates", () => {
+    const pipeline = defaultPipeline();
+    pipeline.mapping.fields = [
+      {
+        from: "customer_id",
+        to: "customer.id",
+        transforms: [{ type: "trim" }],
+      },
+    ];
+    const largeCsv = [
+      "customer_id,full_name,amount",
+      ...Array.from({ length: 500 }, (_, index) =>
+        `${1000 + index},Ada Lovelace ${index},${index + 0.5}`,
+      ),
+    ].join("\n");
+
+    const request = buildAiRequest({
+      mode: "studio",
+      pipeline,
+      samplePayload: largeCsv,
+      authorPrompt: defaultAiInstruction("studio", pipeline),
+      requestedMaxTokens: 1200,
+      contextWindowSize: 4096,
+    });
+
+    expect(request.promptMode).toBe("compact");
+    expect(request.shouldMergeMappings).toBe(true);
+    expect(request.lockedMappingTargets).toEqual(["customer.id"]);
+    expect(request.prompt).toContain("Compact mode is active");
+    expect(request.prompt).toContain("Unresolved target candidates:");
+    expect(request.prompt).not.toContain("Current pipeline JSON:");
+    expect(request.prompt).not.toContain(largeCsv);
+  });
+
+  it("marks a request as unfit when even compact mode cannot fit the context window", () => {
+    const request = buildAiRequest({
+      mode: "studio",
+      pipeline: defaultPipeline(),
+      samplePayload:
+        "customer_id,full_name,amount\n1001,Ada Lovelace,12.50\n1002,Grace Hopper,41.75",
+      authorPrompt: defaultAiInstruction("studio", defaultPipeline()),
+      requestedMaxTokens: 1200,
+      contextWindowSize: 700,
+    });
+
+    expect(request.promptMode).toBe("unfit");
+    expect(request.statusNote).toContain("Keeping the deterministic draft only");
+  });
+
+  it("keeps wide tabular target samples compact enough by summarizing columns", () => {
+    const pipeline = defaultPipeline();
+    pipeline.source.format = "xml";
+    pipeline.target.format = "csv";
+    pipeline.targetSchema = {
+      type: "object",
+      fields: Array.from({ length: 120 }, (_, index) => ({
+        name: `column_${index + 1}`,
+        type: "string",
+        column: `column_${index + 1}`,
+        index,
+      })),
+    };
+
+    const wideCsv = [
+      Array.from({ length: 120 }, (_, index) => `column_${index + 1}`).join(","),
+      Array.from({ length: 120 }, (_, index) => `value_${index + 1}`).join(","),
+    ].join("\n");
+
+    const request = buildAiRequest({
+      mode: "studio",
+      pipeline,
+      samplePayload:
+        "<root><member><id>1</id><name>Ada Lovelace</name></member></root>",
+      sampleOutput: wideCsv,
+      authorPrompt: defaultAiInstruction("studio", pipeline),
+      requestedMaxTokens: 1200,
+      contextWindowSize: 4096,
+    });
+
+    expect(request.promptMode).toBe("compact");
+    expect(request.statusNote).toContain("Compacted the request");
+    expect(request.prompt).toContain("Columns (120 total):");
+    expect(request.prompt).toContain("more omitted");
+    expect(request.prompt).not.toContain(wideCsv);
+    expect(request.batches.length).toBeGreaterThan(1);
+    expect(request.batches[0]?.prompt).toContain("batch 1 of");
   });
 });

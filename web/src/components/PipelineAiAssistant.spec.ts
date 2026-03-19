@@ -348,3 +348,149 @@ it("auto-applies structured wizard drafts while keeping a sample-locked target s
     fields: [{ name: "claimant_name", type: "string" }],
   });
 });
+
+it("merges compact-mode AI mappings into existing locked mappings", async () => {
+  createCompletionSpy.mockResolvedValue(
+    streamFromChunks([
+      '{"summary":"Ready","mappingFields":[{"from":"full_name","to":"customer.name","transforms":[{"type":"trim"}]}]}',
+    ]),
+  );
+
+  const pipeline = defaultPipeline();
+  pipeline.mapping.fields = [
+    {
+      from: "customer_id",
+      to: "customer.id",
+      transforms: [{ type: "trim" }],
+    },
+  ];
+  pipeline.targetSchema = {
+    type: "object",
+    fields: [
+      {
+        name: "customer",
+        type: "object",
+        fields: [
+          { name: "id", type: "string" },
+          { name: "name", type: "string" },
+        ],
+      },
+    ],
+  };
+
+  const largeCsv = [
+    "customer_id,full_name,amount",
+    ...Array.from({ length: 500 }, (_, index) =>
+      `${1000 + index},Ada Lovelace ${index},${index + 0.5}`,
+    ),
+  ].join("\n");
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: largeCsv,
+      autoApplyStructured: true,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="ai-generate-button"]').trigger("click");
+  await flushPromises();
+  await flushPromises();
+
+  expect(createCompletionSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Unresolved target candidates:"),
+        }),
+      ]),
+    }),
+  );
+  expect(pipeline.mapping.fields).toEqual([
+    {
+      from: "customer_id",
+      to: "customer.id",
+      transforms: [{ type: "trim" }],
+    },
+    {
+      from: "full_name",
+      to: "customer.name",
+      transforms: [{ type: "trim" }],
+    },
+  ]);
+});
+
+it("batches compact mapping requests for wide schemas and merges the batch outputs", async () => {
+  createCompletionSpy.mockImplementation((request) => {
+    const prompt =
+      request.messages.find(
+        (message: { role: "system" | "user"; content: string }) =>
+          message.role === "user",
+      )?.content ?? "";
+    const batchMatch = prompt.match(/batch (\d+) of (\d+)/i);
+    const batchIndex = batchMatch ? Number(batchMatch[1]) : 1;
+
+    return Promise.resolve(
+      streamFromChunks([
+        `{"summary":"Batch ${batchIndex} ready","mappingFields":[{"from":"source_${batchIndex}","to":"field_${batchIndex}","transforms":[]}]} `,
+      ]),
+    );
+  });
+
+  const pipeline = defaultPipeline();
+  pipeline.mapping.fields = [];
+  pipeline.source.format = "xml";
+  pipeline.target.format = "csv";
+  pipeline.targetSchema = {
+    type: "object",
+    fields: Array.from({ length: 120 }, (_, index) => ({
+      name: `field_${index + 1}`,
+      type: "string",
+      column: `field_${index + 1}`,
+      index,
+    })),
+  };
+
+  const sampleOutput = [
+    Array.from({ length: 120 }, (_, index) => `field_${index + 1}`).join(","),
+    Array.from({ length: 120 }, (_, index) => `value_${index + 1}`).join(","),
+  ].join("\n");
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload:
+        "<root><claim><id>1</id><name>Ada</name><amount>12.5</amount></claim></root>",
+      sampleOutput,
+      autoApplyStructured: true,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="ai-generate-button"]').trigger("click");
+  await flushPromises();
+  await flushPromises();
+  await flushPromises();
+
+  expect(createCompletionSpy.mock.calls.length).toBeGreaterThan(1);
+  expect(wrapper.text()).toContain("Completed");
+  expect(pipeline.mapping.fields).toEqual(
+    Array.from({ length: createCompletionSpy.mock.calls.length }, (_, index) => ({
+      from: `source_${index + 1}`,
+      to: `field_${index + 1}`,
+      transforms: [],
+    })),
+  );
+});

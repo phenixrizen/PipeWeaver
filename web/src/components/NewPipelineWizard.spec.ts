@@ -246,3 +246,50 @@ it("infers explode repeat mode when the target sample fans repeated xml values i
     },
   ]);
 });
+
+it("pre-wires high-confidence fuzzy matches before handing off to AI", async () => {
+  const pipeline = blankPipeline();
+
+  const wrapper = mount(NewPipelineWizard, {
+    props: {
+      pipeline,
+      samplePayload: '{"customer":{"name":"Ada Lovelace","id":"1001"}}',
+      sampleOutput: "customer_name\nAda Lovelace",
+      "onUpdate:pipeline": () => undefined,
+      "onUpdate:samplePayload": () => undefined,
+      "onUpdate:sampleOutput": () => undefined,
+    },
+    global: {
+      stubs: {
+        SamplePayloadEditor: SamplePayloadEditorStub,
+        PipelineAiAssistant: PipelineAiAssistantStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="wizard-name-input"]').setValue(
+    "Claims intake to CSV",
+  );
+  await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
+
+  const sourceSelects = wrapper.findAll("select");
+  await sourceSelects[0].setValue("http");
+  await sourceSelects[1].setValue("json");
+  await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
+
+  const targetSelects = wrapper.findAll("select");
+  await targetSelects[0].setValue("stdout");
+  await targetSelects[1].setValue("csv");
+  await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
+  await wrapper.get('[data-testid="wizard-complete-button"]').trigger("click");
+
+  expect(pipeline.mapping.fields).toEqual([
+    {
+      from: "customer.name",
+      to: "customer_name",
+      required: false,
+      expression: "",
+      transforms: [{ type: "trim" }],
+    },
+  ]);
+});

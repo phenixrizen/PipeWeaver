@@ -3,7 +3,8 @@ import { computed, ref } from "vue";
 import TransformEditor from "./TransformEditor.vue";
 import { validateExpression } from "../lib/cel";
 import {
-  applySuggestedMappings,
+  applyHighConfidenceSuggestedMappings,
+  flattenSchemaLeafOptions,
   flattenSchemaLeafPaths,
   inferSourceFields,
   upsertMapping,
@@ -49,6 +50,10 @@ const targetPaths = computed(() =>
   flattenSchemaLeafPaths(props.targetSchema?.fields),
 );
 
+const targetFieldOptions = computed(() =>
+  flattenSchemaLeafOptions(props.targetSchema?.fields),
+);
+
 const handleDrop = (target: string) => {
   if (!draggedSource.value) {
     return;
@@ -63,7 +68,11 @@ const handleDrop = (target: string) => {
 };
 
 const applyAISuggestions = () => {
-  applySuggestedMappings(model.value, sourceFields.value, targetPaths.value);
+  applyHighConfidenceSuggestedMappings(
+    model.value,
+    sourceFields.value,
+    targetFieldOptions.value,
+  );
 };
 </script>
 

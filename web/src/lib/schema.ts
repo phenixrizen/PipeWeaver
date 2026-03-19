@@ -10,6 +10,20 @@ export interface SourceFieldOption {
   type: string;
 }
 
+export interface RankedMatchCandidate {
+  source: string;
+  type: string;
+  score: number;
+}
+
+export interface TargetMatchResolution {
+  target: string;
+  targetType: string;
+  confidence: "exact" | "high" | "medium" | "low";
+  chosenSource?: string;
+  candidates: RankedMatchCandidate[];
+}
+
 type SampleRecord = Record<string, unknown>;
 
 const TABULAR_FORMATS = new Set(["csv", "tsv", "pipe"]);
@@ -507,20 +521,143 @@ export const normalizeToken = (value: string) =>
     .split(/\s+/)
     .filter(Boolean);
 
-export const scoreMatch = (source: string, target: string) => {
-  const sourceTokens = normalizeToken(source);
-  const targetTokens = normalizeToken(target.split(".").pop() || target);
-  const overlap = sourceTokens.filter((token) =>
-    targetTokens.includes(token),
-  ).length;
+const scalarTypes = new Set(["string", "integer", "number", "boolean"]);
 
+const scoreTokenOverlap = (left: string[], right: string[]) => {
+  if (!left.length || !right.length) {
+    return 0;
+  }
+
+  const overlap = left.filter((token) => right.includes(token)).length;
   if (overlap === 0) {
     return 0;
   }
 
-  const union = new Set([...sourceTokens, ...targetTokens]).size;
+  const union = new Set([...left, ...right]).size;
   return overlap / union;
 };
+
+const areTypesCompatible = (sourceType: string, targetType: string) => {
+  if (sourceType === targetType) {
+    return true;
+  }
+
+  return scalarTypes.has(sourceType) && scalarTypes.has(targetType);
+};
+
+export const scoreMatch = (source: string, target: string) => {
+  const sourceLeaf = source.split(".").pop() || source;
+  const targetLeaf = target.split(".").pop() || target;
+
+  return scoreTokenOverlap(
+    normalizeToken(sourceLeaf),
+    normalizeToken(targetLeaf),
+  );
+};
+
+export const scoreTargetMatch = (
+  sourceField: SourceFieldOption,
+  targetField: SourceFieldOption,
+) => {
+  const sourceLeaf = sourceField.path.split(".").pop() || sourceField.path;
+  const targetLeaf = targetField.path.split(".").pop() || targetField.path;
+  const normalizedSourceLeaf = normalizeToken(sourceLeaf).join(" ");
+  const normalizedTargetLeaf = normalizeToken(targetLeaf).join(" ");
+  const normalizedSourcePath = normalizeToken(sourceField.path).join(" ");
+  const normalizedTargetPath = normalizeToken(targetField.path).join(" ");
+
+  if (
+    normalizedSourcePath === normalizedTargetPath ||
+    normalizedSourceLeaf === normalizedTargetLeaf
+  ) {
+    return 1;
+  }
+
+  const leafOverlap = scoreTokenOverlap(
+    normalizeToken(sourceLeaf),
+    normalizeToken(targetLeaf),
+  );
+  const pathOverlap = scoreTokenOverlap(
+    normalizeToken(sourceField.path),
+    normalizeToken(targetField.path),
+  );
+
+  let score = leafOverlap * 0.7 + pathOverlap * 0.3;
+
+  if (normalizedSourcePath.endsWith(normalizedTargetLeaf)) {
+    score += 0.08;
+  }
+
+  if (normalizedTargetPath.includes(normalizedSourceLeaf)) {
+    score += 0.05;
+  }
+
+  if (areTypesCompatible(sourceField.type, targetField.type)) {
+    score += 0.05;
+  } else if (
+    sourceField.type === "array" ||
+    targetField.type === "array" ||
+    sourceField.type === "object" ||
+    targetField.type === "object"
+  ) {
+    score -= 0.18;
+  }
+
+  return Math.max(0, Math.min(score, 0.99));
+};
+
+const classifyMatchConfidence = (candidates: RankedMatchCandidate[]) => {
+  const best = candidates[0];
+  const second = candidates[1];
+
+  if (!best) {
+    return "low" as const;
+  }
+
+  const scoreGap = best.score - (second?.score ?? 0);
+  if (best.score >= 0.995 && scoreGap >= 0.12) {
+    return "exact" as const;
+  }
+
+  if (best.score >= 0.74 && scoreGap >= 0.12) {
+    return "high" as const;
+  }
+
+  if (best.score >= 0.42) {
+    return "medium" as const;
+  }
+
+  return "low" as const;
+};
+
+export const rankTargetMatches = (
+  sourceFields: SourceFieldOption[],
+  targetFields: SourceFieldOption[],
+) =>
+  targetFields.map<TargetMatchResolution>((targetField) => {
+    const candidates = sourceFields
+      .map((sourceField) => ({
+        source: sourceField.path,
+        type: sourceField.type,
+        score: scoreTargetMatch(sourceField, targetField),
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3);
+
+    const confidence = classifyMatchConfidence(candidates);
+
+    return {
+      target: targetField.path,
+      targetType: targetField.type,
+      confidence,
+      chosenSource:
+        confidence === "exact" || confidence === "high"
+          ? candidates[0]?.source
+          : undefined,
+      candidates,
+    };
+  });
 
 export const upsertMapping = (
   mappings: FieldMapping[],
@@ -546,6 +683,27 @@ export const upsertMapping = (
     expression: "",
     repeatMode: sourceField?.type === "array" ? "inherit" : undefined,
     transforms: sourceField?.type === "array" ? [] : [{ type: "trim" }],
+  });
+};
+
+export const applyHighConfidenceSuggestedMappings = (
+  mappings: FieldMapping[],
+  sourceFields: SourceFieldOption[],
+  targetFields: SourceFieldOption[],
+) => {
+  rankTargetMatches(sourceFields, targetFields).forEach((resolution) => {
+    if (!resolution.chosenSource) {
+      return;
+    }
+
+    const sourceField = sourceFields.find(
+      (source) => source.path === resolution.chosenSource,
+    );
+    if (!sourceField) {
+      return;
+    }
+
+    upsertMapping(mappings, resolution.chosenSource, resolution.target, sourceField);
   });
 };
 

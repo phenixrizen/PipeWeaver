@@ -4,7 +4,7 @@ import MonacoCodeEditor from "./MonacoCodeEditor.vue";
 import {
   aiModeLabels,
   aiModelOptions,
-  buildAiPrompt,
+  buildAiRequest,
   defaultAiInstruction,
   isStructuredAiMode,
   normalizeStructuredAiResponseText,
@@ -12,6 +12,7 @@ import {
   structuredAiResponseSchema,
   type AiDraftMode,
   type AiDraftResponse,
+  type AiPromptBuildResult,
 } from "../lib/ai";
 import { loadWebLLM } from "../lib/webllm";
 import type { PipelineDefinition } from "../types/pipeline";
@@ -111,6 +112,8 @@ let engine:
     }
   | undefined;
 
+let lastPromptBuild: AiPromptBuildResult | undefined;
+
 const canUseWebGpu = computed(
   () => typeof navigator !== "undefined" && "gpu" in navigator,
 );
@@ -191,12 +194,15 @@ const canCancelGeneration = computed(
   () =>
     isBusy.value &&
     [
-      "Submitting prompt",
-      "Running local inference",
-      "Streaming partial response",
-      "Parsing model response",
-      "Cancelling generation",
-    ].includes(progressStep.value),
+      progressStep.value === "Submitting prompt",
+      progressStep.value.startsWith("Submitting batch "),
+      progressStep.value === "Running local inference",
+      progressStep.value === "Streaming partial response",
+      progressStep.value.startsWith("Streaming batch "),
+      progressStep.value === "Parsing model response",
+      progressStep.value.startsWith("Parsing batch "),
+      progressStep.value === "Cancelling generation",
+    ].some(Boolean),
 );
 
 const stopElapsedTimer = () => {
@@ -232,6 +238,7 @@ const resetResponse = () => {
   parsedResponse.value = null;
   errorMessage.value = "";
   cancelRequested.value = false;
+  lastPromptBuild = undefined;
 };
 
 const summarizeExplainResponse = (raw: string) => {
@@ -241,6 +248,143 @@ const summarizeExplainResponse = (raw: string) => {
     .find((line) => line.length > 0);
 
   return normalized ?? "Explanation ready.";
+};
+
+const aggregateStructuredResponses = (
+  responses: AiDraftResponse[],
+  totalBatches: number,
+): AiDraftResponse => {
+  const mappingByTarget = new Map<
+    string,
+    NonNullable<AiDraftResponse["mappingFields"]>[number]
+  >();
+
+  responses.forEach((response) => {
+    response.mappingFields?.forEach((mapping) => {
+      mappingByTarget.set(mapping.to, mapping);
+    });
+  });
+
+  const mappingFields = Array.from(mappingByTarget.values());
+  const firstSummary = responses.find((response) => response.summary.trim())?.summary.trim();
+  const summaryText =
+    totalBatches > 1
+      ? firstSummary
+        ? `${firstSummary} Completed ${totalBatches} local batches and collected ${mappingFields.length} mapping suggestions.`
+        : `Completed ${totalBatches} local batches and collected ${mappingFields.length} mapping suggestions.`
+      : firstSummary ?? "Draft ready.";
+
+  return {
+    summary: summaryText,
+    pipelineDescription: responses.find(
+      (response) => response.pipelineDescription?.trim(),
+    )?.pipelineDescription,
+    targetSchema: responses.find((response) => response.targetSchema)?.targetSchema,
+    mappingFields,
+  };
+};
+
+const runGenerationBatch = async (options: {
+  prompt: string;
+  maxTokens: number;
+  batchIndex: number;
+  totalBatches: number;
+}) => {
+  if (!engine) {
+    throw new Error("The local model is not loaded.");
+  }
+
+  const { prompt, maxTokens, batchIndex, totalBatches } = options;
+  const batchLabel =
+    totalBatches > 1 ? `batch ${batchIndex} of ${totalBatches}` : "request";
+
+  requestPreview.value = prompt;
+  updateProgress(
+    "Generating",
+    totalBatches > 1
+      ? `Submitting batch ${batchIndex} of ${totalBatches}`
+      : "Submitting prompt",
+    `Sending ${batchLabel} to the local model.`,
+  );
+
+  const completion = await engine.instance.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content: isStructuredMode.value
+          ? "You are PipeWeaver Studio AI. Produce practical mapping drafts for ETL operators. Return exactly one JSON object that follows the provided schema. Do not include markdown fences or commentary."
+          : "You are PipeWeaver Studio AI. Explain ETL pipelines for operators in concise markdown. Do not return JSON unless the user explicitly asks for it.",
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    max_tokens: maxTokens,
+    stream: true,
+    temperature: 0.2,
+    ...(isStructuredMode.value
+      ? {
+          response_format: {
+            type: "json_object" as const,
+            schema: structuredAiResponseSchema,
+          },
+        }
+      : {}),
+  });
+
+  let batchResponseText = "";
+  let wasCancelled = false;
+  responseText.value = "";
+
+  if (isAsyncIterable(completion)) {
+    updateProgress(
+      "Generating",
+      totalBatches > 1
+        ? `Streaming batch ${batchIndex} of ${totalBatches}`
+        : "Streaming partial response",
+      `Receiving partial output for ${batchLabel}.`,
+    );
+
+    for await (const chunk of completion) {
+      const delta = chunk.choices
+        ?.map((choice) => choice.delta?.content ?? "")
+        .join("");
+
+      if (chunk.choices?.some((choice) => choice.finish_reason === "abort")) {
+        wasCancelled = true;
+      }
+
+      if (!delta) {
+        if (wasCancelled || cancelRequested.value) {
+          break;
+        }
+        continue;
+      }
+
+      batchResponseText += delta;
+      responseText.value = batchResponseText;
+      updateProgress(
+        "Generating",
+        totalBatches > 1
+          ? `Streaming batch ${batchIndex} of ${totalBatches}`
+          : "Streaming partial response",
+        `Received ${batchResponseText.length.toLocaleString()} response characters for ${batchLabel} so far.`,
+      );
+
+      if (wasCancelled || cancelRequested.value) {
+        break;
+      }
+    }
+  } else {
+    batchResponseText = completion.choices[0]?.message.content ?? "";
+    responseText.value = batchResponseText;
+  }
+
+  return {
+    wasCancelled: wasCancelled || cancelRequested.value,
+    responseText: batchResponseText.trim(),
+  };
 };
 
 const refreshModelCacheStatus = async () => {
@@ -378,19 +522,35 @@ const generateDraft = async () => {
     "Collecting the current pipeline, sample payload, and operator prompt.",
   );
 
-  requestPreview.value = buildAiPrompt({
+  lastPromptBuild = buildAiRequest({
     mode: selectedMode.value,
     pipeline: pipeline.value,
     samplePayload: props.samplePayload,
     sampleOutput: props.sampleOutput,
     authorPrompt: instructionText.value,
+    requestedMaxTokens: normalizedMaxTokens.value,
+    contextWindowSize: selectedModelOption.value.contextWindowSize,
   });
+  requestPreview.value = lastPromptBuild.prompt;
 
   updateProgress(
     "Preparing request",
     "Request payload ready",
-    `Built a ${requestPreview.value.length.toLocaleString()} character request for local inference with a ${normalizedMaxTokens.value.toLocaleString()} token response budget.`,
+    `${lastPromptBuild.statusNote} Built a ${requestPreview.value.length.toLocaleString()} character ${lastPromptBuild.promptMode} request with an estimated ${lastPromptBuild.estimatedPromptTokens.toLocaleString()} prompt tokens and a ${lastPromptBuild.effectiveMaxTokens.toLocaleString()} token response budget.`,
   );
+
+  if (lastPromptBuild.promptMode === "unfit") {
+    summary.value = lastPromptBuild.statusNote;
+    emit("generated", {
+      mode: selectedMode.value,
+      structured: isStructuredMode.value,
+      summary: summary.value,
+      responseText: "",
+      parsedResponse: null,
+    });
+    updateProgress("Ready", "AI skipped", lastPromptBuild.statusNote);
+    return;
+  }
 
   if (!isModelReady.value) {
     updateProgress(
@@ -414,87 +574,64 @@ const generateDraft = async () => {
   startElapsedTimer();
 
   try {
-    let wasCancelled = false;
+    const promptBatches = lastPromptBuild.batches;
+    const totalBatches = promptBatches.length;
+    const structuredResponses: AiDraftResponse[] = [];
+    const explainResponses: string[] = [];
 
     updateProgress(
       "Generating",
       "Running local inference",
-      isStructuredMode.value
-        ? "The local model is decoding a structured JSON draft. Larger prompts and models can take a while."
-        : "The local model is drafting an operator-facing explanation. Larger prompts and models can take a while.",
+      totalBatches > 1
+        ? `The local model is resolving ${totalBatches} compact batches for this draft.`
+        : isStructuredMode.value
+          ? "The local model is decoding a structured JSON draft. Larger prompts and models can take a while."
+          : "The local model is drafting an operator-facing explanation. Larger prompts and models can take a while.",
     );
 
-    const completion = await engine.instance.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: isStructuredMode.value
-            ? "You are PipeWeaver Studio AI. Produce practical mapping drafts for ETL operators. Return exactly one JSON object that follows the provided schema. Do not include markdown fences or commentary."
-            : "You are PipeWeaver Studio AI. Explain ETL pipelines for operators in concise markdown. Do not return JSON unless the user explicitly asks for it.",
-        },
-        {
-          role: "user",
-          content: requestPreview.value,
-        },
-      ],
-      max_tokens: normalizedMaxTokens.value,
-      stream: true,
-      temperature: 0.2,
-      ...(isStructuredMode.value
-        ? {
-            response_format: {
-              type: "json_object" as const,
-              schema: structuredAiResponseSchema,
-            },
-          }
-        : {}),
-    });
+    for (const batch of promptBatches) {
+      if (cancelRequested.value) {
+        break;
+      }
 
-    responseText.value = "";
+      const batchResult = await runGenerationBatch({
+        prompt: batch.prompt,
+        maxTokens: batch.effectiveMaxTokens,
+        batchIndex: batch.batchIndex,
+        totalBatches: batch.totalBatches,
+      });
 
-    if (isAsyncIterable(completion)) {
+      if (batchResult.wasCancelled) {
+        updateProgress(
+          "Generation cancelled",
+          "Generation cancelled",
+          `Stopped after ${elapsedSeconds.value}s. Partial output remains in the response editor.`,
+        );
+        return;
+      }
+
       updateProgress(
         "Generating",
-        "Streaming partial response",
-        "Receiving partial output from the local model.",
+        isStructuredMode.value
+          ? totalBatches > 1
+            ? `Parsing batch ${batch.batchIndex} of ${batch.totalBatches}`
+            : "Parsing model response"
+          : "Finalizing explanation",
+        isStructuredMode.value
+          ? totalBatches > 1
+            ? `Validating and parsing the JSON draft for batch ${batch.batchIndex} of ${batch.totalBatches}.`
+            : "The raw response is back. Validating and parsing the JSON draft now."
+          : "The raw explanation is back. Tidying the final markdown output now.",
       );
 
-      for await (const chunk of completion) {
-        const delta = chunk.choices
-          ?.map((choice) => choice.delta?.content ?? "")
-          .join("");
-
-        if (chunk.choices?.some((choice) => choice.finish_reason === "abort")) {
-          wasCancelled = true;
-        }
-
-        if (!delta) {
-          if (wasCancelled || cancelRequested.value) {
-            break;
-          }
-          continue;
-        }
-
-        responseText.value += delta;
-        updateProgress(
-          "Generating",
-          "Streaming partial response",
-          `Received ${responseText.value.length.toLocaleString()} response characters so far.`,
-        );
-
-        if (wasCancelled || cancelRequested.value) {
-          break;
-        }
+      if (isStructuredMode.value) {
+        structuredResponses.push(parseAiResponse(batchResult.responseText));
+      } else {
+        explainResponses.push(batchResult.responseText);
       }
-    } else {
-      responseText.value = completion.choices[0]?.message.content ?? "";
     }
 
     if (cancelRequested.value) {
-      wasCancelled = true;
-    }
-
-    if (wasCancelled) {
       updateProgress(
         "Generation cancelled",
         "Generation cancelled",
@@ -503,23 +640,19 @@ const generateDraft = async () => {
       return;
     }
 
-    updateProgress(
-      "Generating",
-      isStructuredMode.value ? "Parsing model response" : "Finalizing explanation",
-      isStructuredMode.value
-        ? "The raw response is back. Validating and parsing the JSON draft now."
-        : "The raw explanation is back. Tidying the final markdown output now.",
-    );
-    responseText.value = responseText.value.trim();
     if (isStructuredMode.value) {
-      parsedResponse.value = parseAiResponse(responseText.value);
-      responseText.value = normalizeStructuredAiResponseText(responseText.value);
+      parsedResponse.value = aggregateStructuredResponses(
+        structuredResponses,
+        totalBatches,
+      );
+      responseText.value = JSON.stringify(parsedResponse.value, null, 2);
       summary.value = parsedResponse.value.summary;
       if (props.autoApplyStructured) {
         applyAll();
       }
     } else {
       parsedResponse.value = null;
+      responseText.value = explainResponses.join("\n\n").trim();
       summary.value = summarizeExplainResponse(responseText.value);
     }
     emit("generated", {
@@ -532,7 +665,7 @@ const generateDraft = async () => {
     updateProgress(
       isStructuredMode.value ? "Draft ready" : "Explanation ready",
       isStructuredMode.value ? "Draft ready" : "Explanation ready",
-      `${isStructuredMode.value ? "Draft" : "Explanation"} generated locally in ${elapsedSeconds.value}s.`,
+      `${isStructuredMode.value ? "Draft" : "Explanation"} generated locally in ${elapsedSeconds.value}s${totalBatches > 1 ? ` across ${totalBatches} batches` : ""}.`,
     );
   } catch (error) {
     updateProgress(
@@ -587,8 +720,43 @@ const applySchema = () => {
   }
 };
 
+const mergeDraftMappings = (nextMappings: AiDraftResponse["mappingFields"]) => {
+  if (!nextMappings?.length) {
+    return;
+  }
+
+  const lockedTargets = new Set(lastPromptBuild?.lockedMappingTargets ?? []);
+  const mergedMappings = pipeline.value.mapping.fields.map((mapping) => ({
+    ...mapping,
+    transforms: [...mapping.transforms],
+  }));
+
+  nextMappings.forEach((mapping) => {
+    if (lockedTargets.has(mapping.to)) {
+      return;
+    }
+
+    const existingIndex = mergedMappings.findIndex(
+      (existing) => existing.to === mapping.to,
+    );
+    if (existingIndex === -1) {
+      mergedMappings.push(mapping);
+      return;
+    }
+
+    mergedMappings.splice(existingIndex, 1, mapping);
+  });
+
+  pipeline.value.mapping.fields = mergedMappings;
+};
+
 const applyMappings = () => {
   if (parsedResponse.value?.mappingFields?.length) {
+    if (lastPromptBuild?.shouldMergeMappings) {
+      mergeDraftMappings(parsedResponse.value.mappingFields);
+      return;
+    }
+
     pipeline.value.mapping.fields = parsedResponse.value.mappingFields;
   }
 };

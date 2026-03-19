@@ -3,8 +3,10 @@ import { computed, ref, watch } from "vue";
 import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
 import {
+  applyHighConfidenceSuggestedMappings,
   applyDeterministicMappings,
   createEmptySchema,
+  flattenSchemaLeafOptions,
   flattenSchemaLeafPaths,
   inferRepeatModesFromSamples,
   inferSchemaFromSample,
@@ -237,9 +239,17 @@ const prepareDraftFromSamples = (force = false) => {
     samplePayload.value,
   );
   const targetPaths = flattenSchemaLeafPaths(pipeline.value.targetSchema?.fields);
+  const targetFieldOptions = flattenSchemaLeafOptions(
+    pipeline.value.targetSchema?.fields,
+  );
   const nextMappings: FieldMapping[] = [];
 
   applyDeterministicMappings(nextMappings, sourceFields, targetPaths);
+  applyHighConfidenceSuggestedMappings(
+    nextMappings,
+    sourceFields,
+    targetFieldOptions,
+  );
   inferRepeatModesFromSamples({
     mappings: nextMappings,
     sourceFields,
