@@ -1,0 +1,9 @@
+<envelope>
+	<claim>
+		<name>Bob</name>
+		<codes>
+			<code>12345</code>
+			<code>67890</code>
+		</codes>
+	</claim>
+</envelope>
