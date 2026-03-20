@@ -1,6 +1,7 @@
 import { mount } from "@vue/test-utils";
 import { expect, it } from "vitest";
 import ConnectorConfigCard from "./ConnectorConfigCard.vue";
+import type { ConnectorConfig } from "../types/pipeline";
 
 it("hides config json by default and reveals it on demand", async () => {
   const wrapper = mount(ConnectorConfigCard, {
@@ -31,4 +32,29 @@ it("hides config json by default and reveals it on demand", async () => {
     (wrapper.get('[data-testid="config-json-textarea"]').element as HTMLTextAreaElement)
       .value,
   ).toContain("samplePayload");
+});
+
+it("lets target connectors omit null values from encoded output", async () => {
+  const modelValue: ConnectorConfig = {
+    type: "stdout",
+    format: "json",
+    config: {},
+  };
+
+  const wrapper = mount(ConnectorConfigCard, {
+    props: {
+      modelValue,
+      title: "Target connector",
+      connectorTypes: ["stdout", "file"],
+      formatOptions: ["json", "csv"],
+      "onUpdate:modelValue": () => undefined,
+    },
+  });
+
+  const toggle = wrapper.get('[data-testid="omit-null-values-toggle"]');
+  expect((toggle.element as HTMLInputElement).checked).toBe(false);
+
+  await toggle.setValue(true);
+
+  expect(modelValue.config.omitNullValues).toBe(true);
 });

@@ -32,7 +32,8 @@ type FieldMapping struct {
 
 // Spec wraps a list of field mappings.
 type Spec struct {
-	Fields []FieldMapping `json:"fields" yaml:"fields"`
+	Fields        []FieldMapping `json:"fields" yaml:"fields"`
+	RowDriverPath string         `json:"rowDriverPath,omitempty" yaml:"rowDriverPath,omitempty"`
 }
 
 // Result captures mapped records plus validation output.
@@ -46,43 +47,85 @@ type ApplyOptions struct {
 	DefaultRepeatMode    string
 	DefaultJoinDelimiter string
 	TargetFormat         string
+	DisableFieldExplode  bool
 }
 
 // Apply executes the mapping spec against one or more input records.
 func Apply(spec Spec, source []formats.Record, targetSchema *schema.Definition, options ApplyOptions) (Result, error) {
 	result := Result{Records: make([]formats.Record, 0, len(source))}
 	for _, input := range source {
-		outputs := []formats.Record{{}}
-		for _, field := range spec.Fields {
-			value, exists, err := resolveFieldValue(input, field)
-			if err != nil {
-				return Result{}, fmt.Errorf("resolve value for %q: %w", field.To, err)
-			}
-			if field.Required && !exists {
-				result.ValidationErrors = append(result.ValidationErrors, schema.ValidationError{Path: field.To, Message: "required mapping source missing"})
-				continue
-			}
-			if !exists {
-				continue
-			}
+		scopedInputs, err := scopedInputsForRowDriver(input, spec.RowDriverPath)
+		if err != nil {
+			return Result{}, fmt.Errorf("prepare row driver %q: %w", spec.RowDriverPath, err)
+		}
 
-			transformed, err := applyTransforms(input, value, field.Transforms)
-			if err != nil {
-				return Result{}, fmt.Errorf("apply transforms for %q: %w", field.To, err)
-			}
-			outputs, err = applyField(outputs, field, transformed, options)
-			if err != nil {
-				return Result{}, fmt.Errorf("set path %q: %w", field.To, err)
-			}
+		fieldOptions := options
+		if strings.TrimSpace(spec.RowDriverPath) != "" {
+			fieldOptions.DisableFieldExplode = true
 		}
-		if targetSchema != nil {
-			for _, output := range outputs {
-				result.ValidationErrors = append(result.ValidationErrors, schema.ValidateRecord(*targetSchema, output)...)
+
+		for _, scopedInput := range scopedInputs {
+			outputs := []formats.Record{{}}
+			for _, field := range spec.Fields {
+				value, exists, err := resolveFieldValue(scopedInput, field)
+				if err != nil {
+					return Result{}, fmt.Errorf("resolve value for %q: %w", field.To, err)
+				}
+				if field.Required && !exists {
+					result.ValidationErrors = append(result.ValidationErrors, schema.ValidationError{Path: field.To, Message: "required mapping source missing"})
+					continue
+				}
+				if !exists {
+					continue
+				}
+
+				transformed, err := applyTransforms(scopedInput, value, field.Transforms)
+				if err != nil {
+					return Result{}, fmt.Errorf("apply transforms for %q: %w", field.To, err)
+				}
+				outputs, err = applyField(outputs, field, transformed, fieldOptions)
+				if err != nil {
+					return Result{}, fmt.Errorf("set path %q: %w", field.To, err)
+				}
 			}
+			if targetSchema != nil {
+				for _, output := range outputs {
+					result.ValidationErrors = append(result.ValidationErrors, schema.ValidateRecord(*targetSchema, output)...)
+				}
+			}
+			result.Records = append(result.Records, outputs...)
 		}
-		result.Records = append(result.Records, outputs...)
 	}
 	return result, nil
+}
+
+func scopedInputsForRowDriver(input formats.Record, rowDriverPath string) ([]formats.Record, error) {
+	if strings.TrimSpace(rowDriverPath) == "" {
+		return []formats.Record{input}, nil
+	}
+
+	driverValue, ok := formats.GetPath(input, rowDriverPath)
+	if !ok {
+		return nil, nil
+	}
+
+	items, isArray := driverValue.([]any)
+	if !isArray {
+		items = []any{driverValue}
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	scoped := make([]formats.Record, 0, len(items))
+	for _, item := range items {
+		record := formats.CloneRecord(input)
+		if err := formats.SetPath(record, rowDriverPath, item); err != nil {
+			return nil, err
+		}
+		scoped = append(scoped, record)
+	}
+	return scoped, nil
 }
 
 func resolveFieldValue(record formats.Record, field FieldMapping) (any, bool, error) {
@@ -255,7 +298,7 @@ func applyField(
 	options ApplyOptions,
 ) ([]formats.Record, error) {
 	if items, ok := value.([]any); ok {
-		if resolveRepeatMode(field, options) == "explode" {
+		if !options.DisableFieldExplode && resolveRepeatMode(field, options) == "explode" {
 			return explodeField(outputs, field.To, items)
 		}
 		if isTabularTarget(options.TargetFormat) {

@@ -78,8 +78,9 @@ func nodeToValue(node xmlNode) any {
 
 // XMLEncoder writes a simple XML document from canonical records.
 type XMLEncoder struct {
-	RootName string
-	ItemName string
+	RootName      string
+	ItemName      string
+	OmitNilValues bool
 }
 
 // Encode creates a lightweight XML representation that is sufficient for preview and example use cases.
@@ -98,7 +99,7 @@ func (e XMLEncoder) Encode(_ context.Context, records []Record) ([]byte, error) 
 	buffer.WriteString("<" + root + ">")
 	for _, record := range records {
 		buffer.WriteString("<" + item + ">")
-		if err := encodeXMLMap(buffer, map[string]any(record)); err != nil {
+		if err := encodeXMLMap(buffer, map[string]any(record), e.OmitNilValues); err != nil {
 			return nil, err
 		}
 		buffer.WriteString("</" + item + ">")
@@ -107,40 +108,49 @@ func (e XMLEncoder) Encode(_ context.Context, records []Record) ([]byte, error) 
 	return buffer.Bytes(), nil
 }
 
-func encodeXMLMap(buffer *bytes.Buffer, values map[string]any) error {
+func encodeXMLMap(buffer *bytes.Buffer, values map[string]any, omitNilValues bool) error {
+	sanitized, ok := sanitizeOutputMap(values, omitNilValues)
+	if !ok || sanitized == nil {
+		return nil
+	}
+
 	keys := make([]string, 0, len(values))
-	for key := range values {
+	for key := range sanitized {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		if err := encodeXMLValue(buffer, key, values[key]); err != nil {
+		if err := encodeXMLValue(buffer, key, sanitized[key], omitNilValues); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func encodeXMLValue(buffer *bytes.Buffer, key string, value any) error {
+func encodeXMLValue(buffer *bytes.Buffer, key string, value any, omitNilValues bool) error {
+	if value == nil && omitNilValues {
+		return nil
+	}
+
 	switch typed := value.(type) {
 	case Record:
 		buffer.WriteString("<" + key + ">")
-		if err := encodeXMLMap(buffer, map[string]any(typed)); err != nil {
+		if err := encodeXMLMap(buffer, map[string]any(typed), omitNilValues); err != nil {
 			return err
 		}
 		buffer.WriteString("</" + key + ">")
 		return nil
 	case map[string]any:
 		buffer.WriteString("<" + key + ">")
-		if err := encodeXMLMap(buffer, typed); err != nil {
+		if err := encodeXMLMap(buffer, typed, omitNilValues); err != nil {
 			return err
 		}
 		buffer.WriteString("</" + key + ">")
 		return nil
 	case []any:
 		for _, item := range typed {
-			if err := encodeXMLValue(buffer, key, item); err != nil {
+			if err := encodeXMLValue(buffer, key, item, omitNilValues); err != nil {
 				return err
 			}
 		}

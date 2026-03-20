@@ -1,16 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
 import {
+  applyResolutionMapping,
   applyHighConfidenceSuggestedMappings,
   applyDeterministicMappings,
+  createSamplePreviewResolver,
   createEmptySchema,
   flattenSchemaLeafOptions,
   flattenSchemaLeafPaths,
   inferRepeatModesFromSamples,
+  inferRowDriverPathFromSamples,
   inferSchemaFromSample,
   inferSourceFields,
+  rankTargetMatches,
+  type TargetMatchResolution,
 } from "../lib/schema";
 import type { AiDraftMode, AiDraftResponse } from "../lib/ai";
 import type { FieldMapping, PipelineDefinition } from "../types/pipeline";
@@ -35,6 +40,12 @@ const lastPreparedSignature = ref("");
 const aiSummary = ref("");
 const aiRawDraft = ref("");
 const showRawAiDraft = ref(false);
+const isPreparingDraft = ref(false);
+const localMatchResolutions = ref<TargetMatchResolution[]>([]);
+const draftPreparationStep = ref("");
+
+let prepareDraftRequestId = 0;
+let activePreparePromise: Promise<void> | null = null;
 
 const steps = [
   {
@@ -55,7 +66,7 @@ const steps = [
   {
     label: "Generate",
     heading: "Generate from samples",
-    detail: "PipeWeaver will pre-wire deterministic matches first, then use the local copilot to finish the obvious mappings and polish the description.",
+    detail: "PipeWeaver resolves deterministic and high-confidence fuzzy matches locally first. It only uses the local copilot for targets that still need help.",
   },
 ] as const;
 
@@ -108,6 +119,13 @@ const replyInlineEnabled = computed({
   },
 });
 
+const omitNullValuesEnabled = computed({
+  get: () => targetConfig.value.omitNullValues === true,
+  set: (enabled: boolean) => {
+    targetConfig.value.omitNullValues = enabled;
+  },
+});
+
 const targetSampleLocksSchema = computed(() => sampleOutput.value.trim().length > 0);
 
 const targetFormatMismatch = computed(
@@ -132,23 +150,81 @@ const targetPaths = computed(() =>
   flattenSchemaLeafPaths(pipeline.value.targetSchema?.fields),
 );
 
-const unresolvedTargets = computed(() =>
-  targetPaths.value.filter(
-    (path) => !pipeline.value.mapping.fields.some((mapping) => mapping.to === path),
+const suggestedResolutions = computed(() =>
+  localMatchResolutions.value.filter(
+    (resolution) =>
+      resolution.bucket === "suggested" &&
+      !pipeline.value.mapping.fields.some((mapping) => mapping.to === resolution.target),
   ),
 );
 
-const explodedMappings = computed(() =>
-  pipeline.value.mapping.fields.filter((mapping) => mapping.repeatMode === "explode"),
+const suggestedResolutionCards = computed(() =>
+  {
+    const sourcePreview = createSamplePreviewResolver(
+      pipeline.value.source.format,
+      samplePayload.value,
+    );
+    const targetPreview = createSamplePreviewResolver(
+      pipeline.value.target.format,
+      sampleOutput.value,
+    );
+
+    return suggestedResolutions.value.map((resolution) => {
+    const suggestedSource =
+      resolution.suggestedSource ?? resolution.candidates[0]?.source ?? "";
+
+      return {
+        resolution,
+        suggestedSource,
+        sourceSamplePreview: sourcePreview(suggestedSource) || "No sample value",
+        targetSamplePreview: targetPreview(resolution.target) || "No sample value",
+      };
+    });
+  },
 );
 
+const unsupportedResolutions = computed(() =>
+  localMatchResolutions.value.filter(
+    (resolution) =>
+      resolution.bucket === "unsupported" &&
+      !pipeline.value.mapping.fields.some((mapping) => mapping.to === resolution.target),
+  ),
+);
+
+const canSkipAiFallback = computed(
+  () =>
+    targetSampleLocksSchema.value &&
+    targetPaths.value.length > 0 &&
+    suggestedResolutions.value.length === 0,
+);
+
+const showAiFallback = computed(
+  () => !targetSampleLocksSchema.value || suggestedResolutions.value.length > 0,
+);
+
+const rowDriverPath = computed(() => pipeline.value.mapping.rowDriverPath);
+
 const wizardSummaryText = computed(() => {
+  if (isPreparingDraft.value) {
+    return draftPreparationStep.value
+      ? `${draftPreparationStep.value}. Large XML and CSV contracts can take a moment in the browser.`
+      : "Preparing the local draft from your source and target samples now. Large XML and CSV contracts can take a moment in the browser.";
+  }
+
   if (aiSummary.value.trim()) {
     return aiSummary.value;
   }
 
+  if (canSkipAiFallback.value) {
+    if (unsupportedResolutions.value.length > 0) {
+      return `Applied ${pipeline.value.mapping.fields.length} safe local mappings and found ${unsupportedResolutions.value.length} targets with weak or missing source evidence. The local copilot is skipped because those unsupported targets are not good AI candidates.`;
+    }
+
+    return `Resolved the usable target fields locally with deterministic and structural matching. The local copilot is not needed for this sample pair.`;
+  }
+
   return targetSampleLocksSchema.value
-    ? "The target schema is already grounded by the sample output. Generate from samples to let the local copilot fill unresolved mappings and polish the description."
+    ? `The target schema is already grounded by the sample output. PipeWeaver will only call the local copilot for the ${suggestedResolutions.value.length} plausible targets that still need help.`
     : "Without a target sample, the local copilot can still draft the target schema, first-pass mappings, and a stronger operator-facing description.";
 });
 
@@ -199,6 +275,16 @@ const resetAiSummary = () => {
   showRawAiDraft.value = false;
 };
 
+const applySuggestedResolution = (resolution: TargetMatchResolution) => {
+  applyResolutionMapping(pipeline.value.mapping.fields, resolution);
+};
+
+const applyAllSuggestedResolutions = () => {
+  suggestedResolutions.value.forEach((resolution) => {
+    applySuggestedResolution(resolution);
+  });
+};
+
 const handleAiGenerated = (result: {
   mode: AiDraftMode;
   structured: boolean;
@@ -215,15 +301,13 @@ const handleAiGenerated = (result: {
   showRawAiDraft.value = false;
 };
 
-const prepareDraftFromSamples = (force = false) => {
-  const signature = generationSignature.value;
-  if (!force && lastPreparedSignature.value === signature) {
-    return;
-  }
-  lastPreparedSignature.value = signature;
-  resetAiSummary();
+const setDraftPreparationStep = (value: string) => {
+  draftPreparationStep.value = value;
+};
 
+const seedTargetSchemaPreview = () => {
   if (!pipeline.value.target.format) {
+    pipeline.value.targetSchema = undefined;
     return;
   }
 
@@ -233,7 +317,39 @@ const prepareDraftFromSamples = (force = false) => {
         sampleOutput.value,
       ) ?? createEmptySchema(pipeline.value.target.format))
     : createEmptySchema(pipeline.value.target.format);
+};
 
+const prepareDraftFromSamples = async (
+  force = false,
+  requestId = prepareDraftRequestId,
+) => {
+  const isStale = () => requestId !== prepareDraftRequestId || currentStep.value !== 3;
+  const signature = generationSignature.value;
+  if (!force && lastPreparedSignature.value === signature) {
+    return;
+  }
+  lastPreparedSignature.value = signature;
+  resetAiSummary();
+
+  if (!pipeline.value.target.format) {
+    localMatchResolutions.value = [];
+    pipeline.value.mapping.rowDriverPath = undefined;
+    return;
+  }
+
+  seedTargetSchemaPreview();
+
+  setDraftPreparationStep("Inferring target schema");
+  await yieldToBrowser();
+  if (isStale()) {
+    return;
+  }
+
+  setDraftPreparationStep("Inferring source fields");
+  await yieldToBrowser();
+  if (isStale()) {
+    return;
+  }
   const sourceFields = inferSourceFields(
     pipeline.value.source.format,
     samplePayload.value,
@@ -244,12 +360,26 @@ const prepareDraftFromSamples = (force = false) => {
   );
   const nextMappings: FieldMapping[] = [];
 
+  setDraftPreparationStep("Ranking local matches");
+  await yieldToBrowser();
+  if (isStale()) {
+    return;
+  }
+  const nextResolutions = rankTargetMatches(sourceFields, targetFieldOptions);
+
   applyDeterministicMappings(nextMappings, sourceFields, targetPaths);
   applyHighConfidenceSuggestedMappings(
     nextMappings,
     sourceFields,
     targetFieldOptions,
   );
+  localMatchResolutions.value = nextResolutions;
+
+  setDraftPreparationStep("Inferring repeat behavior");
+  await yieldToBrowser();
+  if (isStale()) {
+    return;
+  }
   inferRepeatModesFromSamples({
     mappings: nextMappings,
     sourceFields,
@@ -258,15 +388,93 @@ const prepareDraftFromSamples = (force = false) => {
     targetFormat: pipeline.value.target.format,
     sampleOutput: sampleOutput.value,
   });
+  pipeline.value.mapping.rowDriverPath = inferRowDriverPathFromSamples({
+    mappings: nextMappings,
+    sourceFields,
+    sourceFormat: pipeline.value.source.format,
+    samplePayload: samplePayload.value,
+    targetFormat: pipeline.value.target.format,
+    sampleOutput: sampleOutput.value,
+  });
   pipeline.value.mapping.fields = nextMappings;
+
+  setDraftPreparationStep("Finalizing draft");
+  await yieldToBrowser();
+  if (isStale()) {
+    return;
+  }
+  const nextSuggestedTargets = nextResolutions.filter(
+    (resolution) =>
+      resolution.bucket === "suggested" &&
+      !nextMappings.some((mapping) => mapping.to === resolution.target),
+  );
+  const nextUnsupportedTargets = nextResolutions.filter(
+    (resolution) =>
+      resolution.bucket === "unsupported" &&
+      !nextMappings.some((mapping) => mapping.to === resolution.target),
+  );
+  if (
+    sampleOutput.value.trim() &&
+    targetPaths.length > 0 &&
+    nextSuggestedTargets.length === 0
+  ) {
+    aiSummary.value =
+      nextUnsupportedTargets.length === 0
+        ? `Resolved all ${targetPaths.length} target fields locally with deterministic and structural matching.`
+        : `Applied ${nextMappings.length} safe local mappings and left ${nextUnsupportedTargets.length} unsupported targets out of the AI fallback.`;
+  }
+};
+
+const yieldToBrowser = async () => {
+  await nextTick();
+  await Promise.resolve();
+  if (
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function" &&
+    !/jsdom/i.test(window.navigator.userAgent)
+  ) {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }
+};
+
+const scheduleDraftPreparation = (force = false) => {
+  const requestId = ++prepareDraftRequestId;
+  seedTargetSchemaPreview();
+  isPreparingDraft.value = true;
+
+  const promise = (async () => {
+    await yieldToBrowser();
+    if (requestId !== prepareDraftRequestId || currentStep.value !== 3) {
+      return;
+    }
+    await prepareDraftFromSamples(force, requestId);
+  })().finally(() => {
+    if (requestId === prepareDraftRequestId) {
+      isPreparingDraft.value = false;
+      draftPreparationStep.value = "";
+    }
+    if (activePreparePromise === promise) {
+      activePreparePromise = null;
+    }
+  });
+
+  activePreparePromise = promise;
+  return promise;
 };
 
 watch(
   () => currentStep.value,
   (step) => {
     if (step === 3) {
-      prepareDraftFromSamples();
+      void scheduleDraftPreparation();
+      return;
     }
+
+    prepareDraftRequestId += 1;
+    isPreparingDraft.value = false;
+    draftPreparationStep.value = "";
   },
 );
 
@@ -274,7 +482,7 @@ watch(
   generationSignature,
   () => {
     if (currentStep.value === 3) {
-      prepareDraftFromSamples(true);
+      void scheduleDraftPreparation(true);
     }
   },
 );
@@ -293,7 +501,7 @@ const previousStep = () => {
   currentStep.value -= 1;
 };
 
-const completeWizard = () => {
+const completeWizard = async () => {
   if (!pipeline.value.source.type || !pipeline.value.source.format) {
     currentStep.value = 1;
     return;
@@ -303,7 +511,11 @@ const completeWizard = () => {
     return;
   }
 
-  prepareDraftFromSamples();
+  if (activePreparePromise) {
+    await activePreparePromise;
+  } else {
+    await prepareDraftFromSamples();
+  }
 
   if (pipeline.value.source.type !== "http") {
     delete targetConfig.value.responseMode;
@@ -483,6 +695,25 @@ const completeWizard = () => {
           </div>
         </div>
 
+        <div class="rounded-3xl border border-sky-100 bg-sky-50/70 p-5">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="panel-title text-sky-700">Null output handling</p>
+              <p class="mt-2 text-sm leading-6 text-sky-900">
+                Leave null or missing values blank in CSV, TSV, or pipe output and omit them from JSON or XML output instead of rendering placeholder nil text.
+              </p>
+            </div>
+            <label class="inline-flex items-center gap-2 text-sm font-medium text-sky-900">
+              <input
+                v-model="omitNullValuesEnabled"
+                type="checkbox"
+                class="h-4 w-4 rounded border-sky-300 text-sky-500 focus:ring-sky-200"
+              />
+              Omit nulls
+            </label>
+          </div>
+        </div>
+
         <SamplePayloadEditor
           v-model="sampleOutput"
           :format="pipeline.target.format"
@@ -514,21 +745,31 @@ const completeWizard = () => {
                   </p>
                 </div>
                 <div class="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
-                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Deterministic matches</p>
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Auto-applied</p>
                   <p class="mt-2 font-semibold text-slate-900">
-                    {{ pipeline.mapping.fields.length }} mapping{{ pipeline.mapping.fields.length === 1 ? '' : 's' }} pre-wired
+                    {{
+                      isPreparingDraft
+                        ? "Working..."
+                        : `${pipeline.mapping.fields.length} mapping${pipeline.mapping.fields.length === 1 ? '' : 's'} pre-wired`
+                    }}
                   </p>
                 </div>
                 <div class="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
-                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Unresolved targets</p>
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Likely suggestions</p>
                   <p class="mt-2 font-semibold text-slate-900">
-                    {{ unresolvedTargets.length }}
+                    {{ isPreparingDraft ? "..." : suggestedResolutionCards.length }}
                   </p>
                 </div>
                 <div class="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
-                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Exploded fields</p>
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Unsupported targets</p>
                   <p class="mt-2 font-semibold text-slate-900">
-                    {{ explodedMappings.length ? explodedMappings.map((mapping) => mapping.to).join(', ') : 'None' }}
+                    {{ isPreparingDraft ? "..." : unsupportedResolutions.length }}
+                  </p>
+                </div>
+                <div class="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
+                  <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Row driver</p>
+                  <p class="mt-2 break-all font-semibold text-slate-900">
+                    {{ rowDriverPath || 'None' }}
                   </p>
                 </div>
               </div>
@@ -585,25 +826,141 @@ const completeWizard = () => {
                 {{
                   aiRawDraft
                     ? "The structured draft has already been applied to the pipeline. Open the raw AI draft only when you need to inspect the exact generated JSON."
-                    : "Generate from samples to let the local model refine the deterministic draft. The wizard will apply the usable result automatically."
+                    : "Generate from samples to let the local model refine only the plausible unresolved targets. Unsupported targets stay out of the AI request."
                 }}
+              </p>
+            </div>
+
+            <div
+              v-if="suggestedResolutions.length"
+              class="rounded-3xl border border-sky-200 bg-white p-5 shadow-sm"
+            >
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <p class="panel-title text-sky-700">Likely local matches</p>
+                  <p class="mt-2 text-sm leading-6 text-slate-600">
+                    PipeWeaver found strong structural candidates for these targets, but left them for review instead of auto-applying them.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="button-secondary"
+                  data-testid="wizard-apply-likely-button"
+                  @click="applyAllSuggestedResolutions"
+                >
+                  Apply likely matches
+                </button>
+              </div>
+
+              <div class="mt-4 max-h-96 space-y-3 overflow-auto pr-1">
+                <div
+                  v-for="card in suggestedResolutionCards"
+                  :key="card.resolution.target"
+                  class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                >
+                  <div class="flex items-start justify-between gap-4">
+                    <div class="min-w-0">
+                      <p class="text-sm font-semibold text-slate-900">
+                        {{ card.resolution.target }}
+                      </p>
+                      <p class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">
+                        Best local candidate
+                      </p>
+                      <p class="mt-1 break-all text-sm text-slate-700">
+                        {{ card.suggestedSource || "No candidate" }}
+                      </p>
+                      <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                        <div class="rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                            Source sample
+                          </p>
+                          <p class="mt-1 text-sm text-slate-700">
+                            {{ card.sourceSamplePreview }}
+                          </p>
+                        </div>
+                        <div class="rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                            Target sample
+                          </p>
+                          <p class="mt-1 text-sm text-slate-700">
+                            {{ card.targetSamplePreview }}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="button-secondary whitespace-nowrap"
+                      data-testid="wizard-apply-suggested-button"
+                      @click="applySuggestedResolution(card.resolution)"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-if="unsupportedResolutions.length"
+              class="rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm"
+            >
+              <p class="panel-title">Weak or Missing Source Evidence</p>
+              <p class="mt-2 text-sm leading-6 text-slate-600">
+                {{
+                  unsupportedResolutions.length
+                }}
+                target{{ unsupportedResolutions.length === 1 ? "" : "s" }} do not have a strong local source candidate. The wizard keeps them out of the AI fallback instead of asking the model to guess.
               </p>
             </div>
           </div>
 
+          <div
+            v-if="isPreparingDraft"
+            class="rounded-3xl border border-sky-200 bg-sky-50/80 p-6 text-sm leading-6 text-sky-950 shadow-sm"
+          >
+            <p class="panel-title text-sky-700">Preparing local draft</p>
+            <p class="mt-3">
+              PipeWeaver is analyzing the dropped source and target samples before deciding whether the AI fallback is needed.
+            </p>
+            <p class="mt-3 text-sm font-medium text-sky-900">
+              Matching status:
+              <span class="font-semibold">
+                {{ draftPreparationStep || "Queued" }}
+              </span>
+            </p>
+          </div>
           <PipelineAiAssistant
+            v-else-if="showAiFallback"
             v-model:pipeline="pipeline"
             :sample-payload="samplePayload"
             :sample-output="sampleOutput"
             :auto-apply-structured="true"
             :hide-apply-actions="true"
             :lock-target-schema="targetSampleLocksSchema"
+            :forced-mode="targetSampleLocksSchema ? 'mapping' : undefined"
             :hide-prompt-editors="true"
             :hide-summary-panel="true"
             :hide-response-editor="true"
             generate-label="Generate from samples"
             @generated="handleAiGenerated"
           />
+          <div
+            v-else
+            class="rounded-3xl border border-emerald-200 bg-emerald-50/80 p-6 text-sm leading-6 text-emerald-950 shadow-sm"
+          >
+            <p class="panel-title text-emerald-700">AI fallback not needed</p>
+            <p class="mt-3">
+              {{
+                unsupportedResolutions.length
+                  ? "The sample output already defined the target contract. PipeWeaver kept the unsupported targets out of the model request and only used the safe local draft."
+                  : "The sample output already defined the target contract, and the local matcher resolved every target field without calling the model."
+              }}
+            </p>
+            <p class="mt-3">
+              Open the full editor if you want to inspect or adjust the generated mappings.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -633,6 +990,7 @@ const completeWizard = () => {
             data-testid="wizard-complete-button"
             class="button-primary"
             type="button"
+            :disabled="isPreparingDraft"
             @click="completeWizard"
           >
             Open full editor

@@ -70,30 +70,37 @@ func (e Executor) RunPreview(ctx context.Context, definition pipeline.Definition
 		return PreviewResult{}, fmt.Errorf("apply mapping: %w", err)
 	}
 	var encoder formats.Encoder
+	omitNullValues := targetOmitNullValues(definition.Target.Config)
 	switch strings.ToLower(definition.Target.Format) {
+	case "json":
+		encoder = formats.JSONEncoder{OmitNilValues: omitNullValues}
 	case "xml":
 		itemName := "record"
 		if definition.TargetSchema != nil && definition.TargetSchema.Name != "" {
 			itemName = definition.TargetSchema.Name
 		}
 		encoder = formats.XMLEncoder{
-			RootName: "records",
-			ItemName: itemName,
+			RootName:      "records",
+			ItemName:      itemName,
+			OmitNilValues: omitNullValues,
 		}
 	case "csv":
 		encoder = formats.DelimitedEncoder{
-			Delimiter: ',',
-			Columns:   buildDelimitedColumns(definition.TargetSchema),
+			Delimiter:  ',',
+			Columns:    buildDelimitedColumns(definition.TargetSchema),
+			NilAsEmpty: omitNullValues,
 		}
 	case "tsv":
 		encoder = formats.DelimitedEncoder{
-			Delimiter: '\t',
-			Columns:   buildDelimitedColumns(definition.TargetSchema),
+			Delimiter:  '\t',
+			Columns:    buildDelimitedColumns(definition.TargetSchema),
+			NilAsEmpty: omitNullValues,
 		}
 	case "pipe", "pipe-delimited":
 		encoder = formats.DelimitedEncoder{
-			Delimiter: '|',
-			Columns:   buildDelimitedColumns(definition.TargetSchema),
+			Delimiter:  '|',
+			Columns:    buildDelimitedColumns(definition.TargetSchema),
+			NilAsEmpty: omitNullValues,
 		}
 	default:
 		encoder, err = formats.NewEncoder(definition.Target.Format)
@@ -112,6 +119,26 @@ func (e Executor) RunPreview(ctx context.Context, definition pipeline.Definition
 		ValidationErrors: mapped.ValidationErrors,
 		DurationMS:       time.Since(started).Milliseconds(),
 	}, nil
+}
+
+func targetOmitNullValues(config map[string]any) bool {
+	if config == nil {
+		return false
+	}
+
+	value, ok := config["omitNullValues"]
+	if !ok {
+		return false
+	}
+
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
 }
 
 func buildMappingOptions(definition pipeline.Definition) mapping.ApplyOptions {

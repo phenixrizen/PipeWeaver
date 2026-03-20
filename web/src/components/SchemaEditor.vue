@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import FieldMappingBrowser from "./FieldMappingBrowser.vue";
 import SchemaTreeNode from "./SchemaTreeNode.vue";
 import {
+  applyResolutionMapping,
   createEmptySchema,
   createFieldFromSource,
+  flattenSchemaLeafOptions,
   inferSourceFields,
   isTabularFormat,
+  rankTargetMatches,
   removeMappingsForTargetPath,
   renameMappingTargets,
   type SourceFieldOption,
   upsertMapping,
 } from "../lib/schema";
+import type { FieldBrowserTargetRow } from "../lib/field-browser";
 import type {
   FieldMapping,
   SchemaDefinition,
@@ -28,6 +33,7 @@ const props = defineProps<{
 
 const draggedSource = ref<string | null>(null);
 const draggedNodePath = ref<number[] | null>(null);
+const selectedSource = ref<string | null>(null);
 
 const cloneFields = (fields: SchemaField[] | undefined): SchemaField[] =>
   (fields ?? []).map((field) => ({
@@ -131,6 +137,38 @@ const mappedSources = computed<Record<string, string | undefined>>(() =>
 const tabularMode = computed(() => isTabularFormat(props.targetFormat));
 
 const schemaFields = computed(() => schemaModel.value?.fields ?? []);
+const targetFieldOptions = computed(() =>
+  flattenSchemaLeafOptions(schemaModel.value?.fields),
+);
+const targetResolutions = computed(() =>
+  rankTargetMatches(sourceFields.value, targetFieldOptions.value),
+);
+const resolutionLookup = computed<
+  Record<string, (typeof targetResolutions.value)[number]>
+>(
+  () =>
+    Object.fromEntries(
+      targetResolutions.value.map((resolution) => [resolution.target, resolution]),
+    ) as Record<string, (typeof targetResolutions.value)[number]>,
+);
+const targetRows = computed<FieldBrowserTargetRow[]>(() =>
+  targetFieldOptions.value.map((target) => {
+    const resolution = resolutionLookup.value[target.path];
+    const mappedSource = mappedSources.value[target.path];
+
+    return {
+      path: target.path,
+      type: target.type,
+      mappedSource,
+      suggestedSource: mappedSource ? undefined : resolution?.suggestedSource,
+      status: mappedSource
+        ? "mapped"
+        : resolution?.suggestedSource
+          ? "suggested"
+          : "unmatched",
+    };
+  }),
+);
 
 const reindexTabularFields = () => {
   if (!tabularMode.value) {
@@ -328,6 +366,7 @@ const removeField = (nodePath: number[]) => {
 
 const startNodeDrag = (nodePath: number[]) => {
   draggedSource.value = null;
+  selectedSource.value = null;
   draggedNodePath.value = [...nodePath];
 };
 
@@ -494,29 +533,52 @@ const toggleRequired = (nodePath: number[], value: boolean) => {
   }
 };
 
+const currentSourcePath = () => draggedSource.value ?? selectedSource.value;
+
+const clearSourceSelection = () => {
+  draggedSource.value = null;
+  selectedSource.value = null;
+};
+
+const startSourceDrag = (sourcePath: string) => {
+  draggedNodePath.value = null;
+  selectedSource.value = sourcePath;
+  draggedSource.value = sourcePath;
+};
+
+const endSourceDrag = () => {
+  draggedSource.value = null;
+};
+
+const mapSourcePathToTarget = (sourcePath: string, targetPath: string) => {
+  upsertMapping(
+    mappings.value,
+    sourcePath,
+    targetPath,
+    sourceFieldLookup.value[sourcePath],
+  );
+  clearSourceSelection();
+};
+
 const mapDraggedSource = (nodePath: number[]) => {
-  if (!draggedSource.value) {
+  const sourcePath = currentSourcePath();
+  if (!sourcePath) {
     return;
   }
   const targetPath = getTargetPath(nodePath);
   if (!targetPath) {
     return;
   }
-  upsertMapping(
-    mappings.value,
-    draggedSource.value,
-    targetPath,
-    sourceFieldLookup.value[draggedSource.value],
-  );
-  draggedSource.value = null;
+  mapSourcePathToTarget(sourcePath, targetPath);
 };
 
-const appendDraggedSource = (parentPath: number[] = []) => {
-  if (!draggedSource.value) {
+const appendSelectedSource = (parentPath: number[] = []) => {
+  const sourcePath = currentSourcePath();
+  if (!sourcePath) {
     return;
   }
 
-  const source = sourceFieldLookup.value[draggedSource.value];
+  const source = sourceFieldLookup.value[sourcePath];
   if (!source) {
     return;
   }
@@ -531,7 +593,7 @@ const appendDraggedSource = (parentPath: number[] = []) => {
     : nextField.name;
 
   upsertMapping(mappings.value, source.path, targetPath, source);
-  draggedSource.value = null;
+  clearSourceSelection();
 };
 
 const handleRootDrop = () => {
@@ -539,7 +601,7 @@ const handleRootDrop = () => {
     moveDraggedNodeToRoot();
     return;
   }
-  appendDraggedSource();
+  appendSelectedSource();
 };
 
 const handleObjectDrop = (nodePath: number[]) => {
@@ -547,7 +609,24 @@ const handleObjectDrop = (nodePath: number[]) => {
     moveDraggedNode(nodePath, "inside");
     return;
   }
-  appendDraggedSource(nodePath);
+  appendSelectedSource(nodePath);
+};
+
+const handleBrowserTargetMap = (targetPath: string) => {
+  const sourcePath = currentSourcePath();
+  if (!sourcePath) {
+    return;
+  }
+  mapSourcePathToTarget(sourcePath, targetPath);
+};
+
+const applySuggestedResolution = (targetPath: string) => {
+  const resolution = resolutionLookup.value[targetPath];
+  if (!resolution) {
+    return;
+  }
+  applyResolutionMapping(mappings.value, resolution);
+  clearSourceSelection();
 };
 
 const onTabularNameChange = (index: number, event: Event) => {
@@ -597,42 +676,19 @@ const xmlItemName = computed({
       </div>
     </div>
 
-    <div class="grid gap-4 xl:grid-cols-[0.9fr,1.1fr]">
-      <div class="rounded-3xl border border-slate-200 bg-slate-50/80 p-4">
-        <div class="flex items-center justify-between gap-3">
-          <p class="text-sm font-semibold text-slate-900">Source fields</p>
-          <span
-            class="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500"
-          >
-            Drag from here
-          </span>
-        </div>
-        <div v-if="sourceFields.length" class="mt-4 flex flex-wrap gap-2">
-          <button
-            v-for="source in sourceFields"
-            :key="source.path"
-            data-testid="source-field-chip"
-            class="rounded-full border border-sky-200 bg-white px-3 py-2 text-left text-sm font-medium text-sky-700 shadow-sm transition hover:border-sky-300 hover:bg-sky-50"
-            type="button"
-            draggable="true"
-            @dragstart="
-              draggedNodePath = null;
-              draggedSource = source.path;
-            "
-            @dragend="draggedSource = null"
-          >
-            {{ source.label }}
-            <span class="ml-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-              {{ source.type }}
-            </span>
-          </button>
-        </div>
-        <p v-else class="mt-4 text-sm text-slate-500">
-          Add a sample payload to infer source fields for drag-and-drop mapping.
-        </p>
-      </div>
+    <FieldMappingBrowser
+      :source-fields="sourceFields"
+      :target-rows="targetRows"
+      :selected-source="selectedSource"
+      :dragging-source="Boolean(draggedSource)"
+      @update:selected-source="selectedSource = $event"
+      @map-target="handleBrowserTargetMap"
+      @apply-suggestion="applySuggestedResolution"
+      @drag-source-start="startSourceDrag"
+      @drag-source-end="endSourceDrag"
+    />
 
-      <div class="space-y-4">
+    <div class="mt-4 space-y-4">
         <label
           v-if="props.targetFormat === 'xml'"
           class="space-y-2 text-sm font-medium text-slate-700"
@@ -645,6 +701,14 @@ const xmlItemName = computed({
           <div class="flex flex-wrap gap-2">
             <button class="button-secondary" type="button" @click="addRootField('leaf')">
               Add column
+            </button>
+            <button
+              v-if="selectedSource"
+              class="button-secondary"
+              type="button"
+              @click="appendSelectedSource()"
+            >
+              Create target from selected source
             </button>
           </div>
 
@@ -785,6 +849,14 @@ const xmlItemName = computed({
             <button class="button-secondary" type="button" @click="addRootField('array')">
               Add array
             </button>
+            <button
+              v-if="selectedSource"
+              class="button-secondary"
+              type="button"
+              @click="appendSelectedSource()"
+            >
+              Create target from selected source
+            </button>
           </div>
 
           <div
@@ -835,7 +907,6 @@ const xmlItemName = computed({
             No target fields yet.
           </p>
         </div>
-      </div>
     </div>
   </section>
 </template>

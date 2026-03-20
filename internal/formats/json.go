@@ -35,17 +35,28 @@ func (d JSONDecoder) Decode(_ context.Context, payload []byte) ([]Record, error)
 }
 
 // JSONEncoder encodes canonical records into compact JSON.
-type JSONEncoder struct{}
+type JSONEncoder struct {
+	OmitNilValues bool
+}
 
 // Encode converts records into JSON while preserving the distinction between one record and many records.
 func (e JSONEncoder) Encode(_ context.Context, records []Record) ([]byte, error) {
 	if len(records) == 1 {
-		return json.MarshalIndent(records[0], "", "  ")
+		sanitized, _ := sanitizeOutputValue(records[0], e.OmitNilValues)
+		if sanitized == nil {
+			sanitized = map[string]any{}
+		}
+		return json.MarshalIndent(sanitized, "", "  ")
 	}
 
 	items := make([]map[string]any, 0, len(records))
 	for _, record := range records {
-		items = append(items, map[string]any(record))
+		sanitized, ok := sanitizeOutputValue(record, e.OmitNilValues)
+		if !ok || sanitized == nil {
+			items = append(items, map[string]any{})
+			continue
+		}
+		items = append(items, map[string]any(sanitized.(Record)))
 	}
 	return json.MarshalIndent(items, "", "  ")
 }

@@ -41,8 +41,9 @@ func (d DelimitedDecoder) Decode(_ context.Context, payload []byte) ([]Record, e
 
 // DelimitedEncoder writes canonical records using a configurable delimiter.
 type DelimitedEncoder struct {
-	Delimiter rune
-	Columns   []DelimitedColumn
+	Delimiter  rune
+	Columns    []DelimitedColumn
+	NilAsEmpty bool
 }
 
 // DelimitedColumn describes the record key and emitted header for a tabular output column.
@@ -70,7 +71,7 @@ func (e DelimitedEncoder) Encode(_ context.Context, records []Record) ([]byte, e
 	for _, record := range records {
 		row := make([]string, 0, len(keys))
 		for _, key := range keys {
-			row = append(row, stringifyDelimitedValue(record[key]))
+			row = append(row, stringifyDelimitedValue(record[key], e.NilAsEmpty))
 		}
 		if err := writer.Write(row); err != nil {
 			return nil, fmt.Errorf("write row: %w", err)
@@ -134,7 +135,14 @@ func orderedDelimitedColumns(records []Record, configured []DelimitedColumn) ([]
 	return keys, headers
 }
 
-func stringifyDelimitedValue(value any) string {
+func stringifyDelimitedValue(value any, nilAsEmpty bool) string {
+	if value == nil {
+		if nilAsEmpty {
+			return ""
+		}
+		return fmt.Sprint(value)
+	}
+
 	items, ok := value.([]any)
 	if !ok {
 		return fmt.Sprint(value)
@@ -142,6 +150,10 @@ func stringifyDelimitedValue(value any) string {
 
 	row := make([]string, 0, len(items))
 	for _, item := range items {
+		if item == nil && nilAsEmpty {
+			row = append(row, "")
+			continue
+		}
 		row = append(row, fmt.Sprint(item))
 	}
 	return strings.Join(row, ", ")

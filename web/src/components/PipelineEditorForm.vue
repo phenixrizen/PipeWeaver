@@ -246,6 +246,7 @@ watch(
     <div v-show="activeTab === 'mapping'">
       <MappingTable
         v-model="pipeline.mapping.fields"
+        v-model:row-driver-path="pipeline.mapping.rowDriverPath"
         :source-format="pipeline.source.format"
         :sample-payload="samplePayload"
         :target-schema="pipeline.targetSchema"
@@ -271,7 +272,10 @@ watch(
     </div>
 
     <div v-show="activeTab === 'preview'">
-      <OutputPreviewPanel :preview="props.preview" />
+      <OutputPreviewPanel
+        :preview="props.preview"
+        :format="pipeline.target.format"
+      />
     </div>
 
     <div v-show="activeTab === 'validation'">

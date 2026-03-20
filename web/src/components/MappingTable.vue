@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import FieldMappingBrowser from "./FieldMappingBrowser.vue";
 import TransformEditor from "./TransformEditor.vue";
 import { validateExpression } from "../lib/cel";
 import {
+  applyResolutionMapping,
   applyHighConfidenceSuggestedMappings,
+  describeSourceFieldPath,
   flattenSchemaLeafOptions,
   flattenSchemaLeafPaths,
   inferSourceFields,
+  rankTargetMatches,
   upsertMapping,
+  type SourceFieldOption,
 } from "../lib/schema";
+import type { FieldBrowserTargetRow } from "../lib/field-browser";
 import type { FieldMapping, SchemaDefinition } from "../types/pipeline";
 
 const props = defineProps<{
@@ -17,8 +23,15 @@ const props = defineProps<{
   targetSchema?: SchemaDefinition;
 }>();
 const model = defineModel<FieldMapping[]>({ required: true });
+const rowDriverPath = defineModel<string | undefined>("rowDriverPath");
 
 const draggedSource = ref<string | null>(null);
+const selectedSource = ref<string | null>(null);
+const focusedTarget = ref<string | null>(null);
+const browserRef = ref<{ scrollToTarget: (targetPath: string) => void } | null>(
+  null,
+);
+const detailCardRefs = new Map<string, HTMLElement>();
 
 const addRow = () => {
   model.value.push({
@@ -40,9 +53,9 @@ const sourceFields = computed(() =>
   inferSourceFields(props.sourceFormat, props.samplePayload),
 );
 
-const sourceFieldLookup = computed<Record<string, { type: string }>>(() =>
+const sourceFieldLookup = computed<Record<string, SourceFieldOption>>(() =>
   Object.fromEntries(
-    sourceFields.value.map((field) => [field.path, { type: field.type }]),
+    sourceFields.value.map((field) => [field.path, field]),
   ),
 );
 
@@ -54,17 +67,119 @@ const targetFieldOptions = computed(() =>
   flattenSchemaLeafOptions(props.targetSchema?.fields),
 );
 
+const targetResolutions = computed(() =>
+  rankTargetMatches(sourceFields.value, targetFieldOptions.value),
+);
+
+const resolutionLookup = computed<Record<string, (typeof targetResolutions.value)[number]>>(
+  () =>
+    Object.fromEntries(
+      targetResolutions.value.map((resolution) => [resolution.target, resolution]),
+    ) as Record<string, (typeof targetResolutions.value)[number]>,
+);
+
+const targetRows = computed<FieldBrowserTargetRow[]>(() =>
+  targetFieldOptions.value.map((target) => {
+    const resolution = resolutionLookup.value[target.path];
+    const mappedSource = model.value.find((row) => row.to === target.path)?.from;
+
+    return {
+      path: target.path,
+      type: target.type,
+      mappedSource,
+      suggestedSource: mappedSource ? undefined : resolution?.suggestedSource,
+      status: mappedSource
+        ? "mapped"
+        : resolution?.suggestedSource
+          ? "suggested"
+          : "unmatched",
+    };
+  }),
+);
+
+const currentSourcePath = () => draggedSource.value ?? selectedSource.value;
+
+const lookupSourceField = (path?: string) => {
+  if (!path) {
+    return undefined;
+  }
+
+  return (
+    sourceFieldLookup.value[path] ??
+    ({
+      ...describeSourceFieldPath(path),
+      observedIndexCount: 0,
+    } as SourceFieldOption)
+  );
+};
+
+const repeatBranchForRow = (row: FieldMapping) =>
+  lookupSourceField(row.from)?.repeatBranchPath;
+
+const setDetailCardRef = (targetPath: string, element: Element | null) => {
+  if (!(element instanceof HTMLElement) || !targetPath) {
+    if (targetPath) {
+      detailCardRefs.delete(targetPath);
+    }
+    return;
+  }
+  detailCardRefs.set(targetPath, element);
+};
+
+const ensureMappingRow = (targetPath: string) => {
+  const existing = model.value.find((row) => row.to === targetPath);
+  if (existing) {
+    return existing;
+  }
+
+  const created: FieldMapping = {
+    from: "",
+    to: targetPath,
+    required: false,
+    expression: "",
+    transforms: [],
+  };
+  model.value.push(created);
+  return created;
+};
+
+const focusDetailCard = async (targetPath: string) => {
+  if (!targetPath) {
+    return;
+  }
+
+  focusedTarget.value = targetPath;
+  await nextTick();
+  detailCardRefs.get(targetPath)?.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+  });
+};
+
+const focusTargetRow = async (targetPath: string) => {
+  if (!targetPath) {
+    return;
+  }
+
+  focusedTarget.value = targetPath;
+  await nextTick();
+  browserRef.value?.scrollToTarget(targetPath);
+};
+
 const handleDrop = (target: string) => {
-  if (!draggedSource.value) {
+  const sourcePath = currentSourcePath();
+  if (!sourcePath) {
     return;
   }
   upsertMapping(
     model.value,
-    draggedSource.value,
+    sourcePath,
     target,
-    sourceFields.value.find((field) => field.path === draggedSource.value),
+    sourceFields.value.find((field) => field.path === sourcePath),
   );
   draggedSource.value = null;
+  selectedSource.value = null;
+  void focusDetailCard(target);
 };
 
 const applyAISuggestions = () => {
@@ -74,6 +189,74 @@ const applyAISuggestions = () => {
     targetFieldOptions.value,
   );
 };
+
+const applySuggestedResolution = (targetPath: string) => {
+  const resolution = resolutionLookup.value[targetPath];
+  if (!resolution) {
+    return;
+  }
+  applyResolutionMapping(model.value, resolution);
+  selectedSource.value = null;
+  void focusDetailCard(targetPath);
+};
+
+const handleBrowserSourceDragStart = (sourcePath: string) => {
+  selectedSource.value = sourcePath;
+  draggedSource.value = sourcePath;
+};
+
+const handleBrowserSourceDragEnd = () => {
+  draggedSource.value = null;
+};
+
+const handleBrowserTargetFocus = (targetPath: string) => {
+  ensureMappingRow(targetPath);
+  void focusDetailCard(targetPath);
+};
+
+const toggleRowDriver = (row: FieldMapping) => {
+  const repeatBranchPath = repeatBranchForRow(row);
+  if (!repeatBranchPath) {
+    return;
+  }
+
+  rowDriverPath.value =
+    rowDriverPath.value === repeatBranchPath ? undefined : repeatBranchPath;
+  focusedTarget.value = row.to || null;
+};
+
+const deleteRow = (index: number) => {
+  const [removed] = model.value.splice(index, 1);
+  if (!removed) {
+    return;
+  }
+
+  const removedBranch = repeatBranchForRow(removed);
+  if (
+    removedBranch &&
+    rowDriverPath.value === removedBranch &&
+    !model.value.some((row) => repeatBranchForRow(row) === removedBranch)
+  ) {
+    rowDriverPath.value = undefined;
+  }
+
+  if (focusedTarget.value === removed.to) {
+    focusedTarget.value = null;
+  }
+};
+
+watch(
+  () => model.value.map((row) => row.from ?? ""),
+  () => {
+    if (
+      rowDriverPath.value &&
+      !model.value.some((row) => repeatBranchForRow(row) === rowDriverPath.value)
+    ) {
+      rowDriverPath.value = undefined;
+    }
+  },
+  { deep: true },
+);
 </script>
 
 <template>
@@ -103,84 +286,63 @@ const applyAISuggestions = () => {
       </div>
     </div>
 
-    <div
+    <FieldMappingBrowser
       v-if="sourceFields.length && targetPaths.length"
-      class="mb-6 grid gap-4 xl:grid-cols-[0.95fr,1.05fr]"
-    >
-      <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-        <div class="flex items-center justify-between gap-3">
-          <p class="text-sm font-semibold text-slate-900">Source fields</p>
-          <span
-            class="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500"
-          >
-            Drag from here
-          </span>
-        </div>
-        <div class="mt-4 flex flex-wrap gap-2">
-          <button
-            v-for="source in sourceFields"
-            :key="source.path"
-            class="rounded-full border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-sky-700 shadow-sm transition hover:border-sky-300 hover:bg-sky-50"
-            type="button"
-            draggable="true"
-            @dragstart="draggedSource = source.path"
-            @dragend="draggedSource = null"
-          >
-            {{ source.label }}
-            <span class="ml-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-              {{ source.type }}
-            </span>
-          </button>
-        </div>
-      </div>
+      ref="browserRef"
+      class="mb-6"
+      :source-fields="sourceFields"
+      :target-rows="targetRows"
+      :selected-source="selectedSource"
+      :dragging-source="Boolean(draggedSource)"
+      :focused-target="focusedTarget"
+      @update:selected-source="selectedSource = $event"
+      @map-target="handleDrop"
+      @focus-target="handleBrowserTargetFocus"
+      @apply-suggestion="applySuggestedResolution"
+      @drag-source-start="handleBrowserSourceDragStart"
+      @drag-source-end="handleBrowserSourceDragEnd"
+    />
 
-      <div
-        class="rounded-2xl border border-slate-200 bg-[linear-gradient(135deg,_rgba(14,165,233,0.08),_rgba(255,255,255,1))] p-4"
-      >
-        <div class="flex items-center justify-between gap-3">
-          <p class="text-sm font-semibold text-slate-900">
-            Output schema targets
-          </p>
-          <span
-            class="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500"
-          >
-            Drop onto a target
-          </span>
-        </div>
-        <div class="mt-4 grid gap-3 md:grid-cols-2">
-          <div
-            v-for="target in targetPaths"
-            :key="target"
-            class="rounded-2xl border border-dashed border-slate-300 bg-white p-4 transition"
-            :class="draggedSource ? 'border-sky-300 shadow-sm' : ''"
-            @dragover.prevent
-            @drop.prevent="handleDrop(target)"
-          >
-            <p
-              class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400"
-            >
-              target path
-            </p>
-            <p class="mt-2 text-sm font-semibold text-slate-900">
-              {{ target }}
-            </p>
-            <p class="mt-2 text-xs text-slate-500">
-              {{
-                model.find((row) => row.to === target)?.from ||
-                "Awaiting mapped source field"
-              }}
-            </p>
-          </div>
-        </div>
-      </div>
+    <div
+      v-if="rowDriverPath"
+      class="mb-6 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+    >
+      Rows are currently driven by <span class="font-semibold">{{ rowDriverPath }}</span>.
+      Fields under this repeated XML branch stay aligned within the same emitted row.
     </div>
 
     <div class="space-y-4">
       <div
         v-for="(row, index) in model"
         :key="index"
-        class="rounded-3xl border border-slate-200 bg-slate-50/80 p-4"
+        :ref="(element) => setDetailCardRef(row.to, element as Element | null)"
+        data-testid="mapping-detail-card"
+        :data-target-path="row.to"
+        class="rounded-3xl border bg-slate-50/80 p-4"
+        :class="
+          focusedTarget === row.to
+            ? 'border-sky-400 shadow-sm shadow-sky-100'
+            : 'border-slate-200'
+        "
       >
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Mapping detail
+            </p>
+            <p class="mt-1 break-all text-sm font-semibold text-slate-900">
+              {{ row.to || "Unassigned target" }}
+            </p>
+          </div>
+          <button
+            v-if="row.to"
+            class="button-secondary"
+            type="button"
+            @click="focusTargetRow(row.to)"
+          >
+            Back to target
+          </button>
+        </div>
         <div class="grid gap-3 lg:grid-cols-[1fr,1fr]">
           <input
             v-model="row.from"
@@ -227,7 +389,7 @@ const applyAISuggestions = () => {
             <select v-model="row.repeatMode" class="input">
               <option value="">inherit</option>
               <option value="preserve">preserve</option>
-              <option value="explode">explode</option>
+              <option v-if="props.sourceFormat !== 'xml'" value="explode">explode</option>
             </select>
           </label>
           <label class="space-y-2 text-sm font-medium text-slate-700">
@@ -241,11 +403,42 @@ const applyAISuggestions = () => {
           </label>
         </div>
         <p
-          v-if="row.from && sourceFieldLookup[row.from]?.type === 'array'"
+          v-if="lookupSourceField(row.from)?.type === 'array'"
           class="mt-3 text-xs font-medium text-sky-700"
         >
           Repeated source field detected. Use `preserve` to keep the array or `explode` to emit one row per item.
         </p>
+        <div
+          v-if="repeatBranchForRow(row)"
+          class="mt-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+        >
+          <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+            Repeated XML branch
+          </p>
+          <p class="mt-1 break-all font-medium">
+            {{ repeatBranchForRow(row) }}
+          </p>
+          <div class="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              class="button-secondary"
+              type="button"
+              data-testid="mapping-row-driver-button"
+              @click="toggleRowDriver(row)"
+            >
+              {{
+                rowDriverPath === repeatBranchForRow(row)
+                  ? "Clear row explosion"
+                  : "Use this branch for row explosion"
+              }}
+            </button>
+            <span
+              v-if="rowDriverPath === repeatBranchForRow(row)"
+              class="rounded-full border border-sky-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700"
+            >
+              Active row driver
+            </span>
+          </div>
+        </div>
         <div class="mt-4">
           <TransformEditor v-model="row.transforms" />
         </div>
@@ -261,7 +454,7 @@ const applyAISuggestions = () => {
           <button
             class="button-secondary"
             type="button"
-            @click="model.splice(index, 1)"
+            @click="deleteRow(index)"
           >
             Delete
           </button>

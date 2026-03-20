@@ -107,6 +107,59 @@ it("creates a nested target leaf and mapping from a dragged source field", async
   ]);
 });
 
+it("creates a root target from the selected source without drag and drop", async () => {
+  const Harness = defineComponent({
+    components: { SchemaEditor },
+    setup() {
+      const schema = ref<SchemaDefinition>();
+      const mappings = ref<FieldMapping[]>([]);
+      return { schema, mappings };
+    },
+    template: `
+      <SchemaEditor
+        v-model="schema"
+        v-model:mappings="mappings"
+        source-format="xml"
+        target-format="json"
+        sample-payload="<order><customer><account><id>1001</id></account></customer></order>"
+      />
+    `,
+  });
+
+  const wrapper = mount(Harness);
+
+  await wrapper
+    .get('[data-testid="field-browser-source-search"]')
+    .setValue("customer.account.id");
+  await wrapper
+    .get('[data-testid="source-field-chip"][data-source-path="customer.account.id"]')
+    .trigger("click");
+  await wrapper
+    .findAll("button")
+    .find((button) => button.text().includes("Create target from selected source"))
+    ?.trigger("click");
+  await wrapper.vm.$nextTick();
+
+  const vm = wrapper.vm as unknown as {
+    schema?: SchemaDefinition;
+    mappings: FieldMapping[];
+  };
+
+  expect(vm.schema?.fields[0]).toMatchObject({
+    name: "id",
+    type: "integer",
+  });
+  expect(vm.mappings).toEqual([
+    {
+      from: "customer.account.id",
+      to: "id",
+      required: false,
+      expression: "",
+      transforms: [{ type: "trim" }],
+    },
+  ]);
+});
+
 it("reorders root target nodes with drag and drop", async () => {
   const Harness = defineComponent({
     components: { SchemaEditor },

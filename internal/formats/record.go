@@ -2,6 +2,7 @@ package formats
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -40,26 +41,7 @@ func GetPath(record Record, path string) (any, bool) {
 		return record, true
 	}
 
-	segments := strings.Split(path, ".")
-	var current any = map[string]any(record)
-	for _, segment := range segments {
-		currentMap, ok := current.(map[string]any)
-		if !ok {
-			recordMap, recordOK := current.(Record)
-			if !recordOK {
-				return nil, false
-			}
-			currentMap = map[string]any(recordMap)
-		}
-
-		next, exists := currentMap[segment]
-		if !exists {
-			return nil, false
-		}
-		current = next
-	}
-
-	return current, true
+	return getPathValue(map[string]any(record), parsePath(path))
 }
 
 // SetPath writes a value into the canonical record using dot notation and creates intermediate maps on demand.
@@ -95,4 +77,92 @@ func SetPath(record Record, path string, value any) error {
 	}
 
 	return nil
+}
+
+type pathSegment struct {
+	key   string
+	index int
+}
+
+func parsePath(path string) []pathSegment {
+	rawSegments := strings.Split(path, ".")
+	segments := make([]pathSegment, 0, len(rawSegments))
+	for _, raw := range rawSegments {
+		segment := pathSegment{key: raw}
+		if bracket := strings.LastIndex(raw, "["); bracket > 0 && strings.HasSuffix(raw, "]") {
+			index, err := strconv.Atoi(raw[bracket+1 : len(raw)-1])
+			if err == nil && index > 0 {
+				segment.key = raw[:bracket]
+				segment.index = index
+			}
+		}
+		segments = append(segments, segment)
+	}
+	return segments
+}
+
+func getPathValue(current any, segments []pathSegment) (any, bool) {
+	if len(segments) == 0 {
+		return current, true
+	}
+
+	if items, ok := current.([]any); ok {
+		flattened := make([]any, 0, len(items))
+		for _, item := range items {
+			value, exists := getPathValue(item, segments)
+			if !exists {
+				continue
+			}
+			if nested, nestedOK := value.([]any); nestedOK {
+				flattened = append(flattened, nested...)
+				continue
+			}
+			flattened = append(flattened, value)
+		}
+		if len(flattened) == 0 {
+			return nil, false
+		}
+		return flattened, true
+	}
+
+	currentMap, ok := current.(map[string]any)
+	if !ok {
+		recordMap, recordOK := current.(Record)
+		if !recordOK {
+			return nil, false
+		}
+		currentMap = map[string]any(recordMap)
+	}
+
+	next, exists := currentMap[segments[0].key]
+	if !exists {
+		return nil, false
+	}
+
+	indexedValue, ok := applyPathIndex(next, segments[0].index)
+	if !ok {
+		return nil, false
+	}
+
+	return getPathValue(indexedValue, segments[1:])
+}
+
+func applyPathIndex(value any, index int) (any, bool) {
+	if index <= 0 {
+		return value, true
+	}
+
+	items, ok := value.([]any)
+	if ok {
+		if index > len(items) {
+			return nil, false
+		}
+		return items[index-1], true
+	}
+
+	if index == 1 {
+		return value, true
+	}
+
+	return nil, false
 }

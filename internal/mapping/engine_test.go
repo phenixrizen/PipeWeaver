@@ -165,3 +165,130 @@ func TestApplyExplodesRepeatedValuesIntoRows(t *testing.T) {
 		t.Fatalf("expected scalar values to be copied across exploded rows: %#v", result.Records)
 	}
 }
+
+func TestApplyUsesRowDriverPathToEmitOneRowPerBranchItem(t *testing.T) {
+	spec := Spec{
+		RowDriverPath: "claim.referral.services.service",
+		Fields: []FieldMapping{
+			{From: "claim.claimNumber", To: "claim_number", Transforms: []Transform{{Type: "trim"}}},
+			{From: "claim.referral.services.service.lineNumber", To: "line_number", Transforms: []Transform{{Type: "trim"}}},
+			{From: "claim.referral.services.service.procedureCode", To: "procedure_code", Transforms: []Transform{{Type: "trim"}}},
+		},
+	}
+	input := []formats.Record{{
+		"claim": map[string]any{
+			"claimNumber": "CLM-100",
+			"referral": map[string]any{
+				"services": map[string]any{
+					"service": []any{
+						map[string]any{"lineNumber": "1", "procedureCode": "97153"},
+						map[string]any{"lineNumber": "2", "procedureCode": "97155"},
+					},
+				},
+			},
+		},
+	}}
+
+	result, err := Apply(spec, input, nil, ApplyOptions{TargetFormat: "csv"})
+	if err != nil {
+		t.Fatalf("apply row driver failed: %v", err)
+	}
+
+	if len(result.Records) != 2 {
+		t.Fatalf("expected 2 row-driver records, got %d", len(result.Records))
+	}
+	if result.Records[0]["claim_number"] != "CLM-100" || result.Records[1]["claim_number"] != "CLM-100" {
+		t.Fatalf("expected root scalar fields copied across row-driver output: %#v", result.Records)
+	}
+	if result.Records[0]["line_number"] != "1" || result.Records[1]["line_number"] != "2" {
+		t.Fatalf("expected service line numbers to stay aligned per row: %#v", result.Records)
+	}
+	if result.Records[0]["procedure_code"] != "97153" || result.Records[1]["procedure_code"] != "97155" {
+		t.Fatalf("expected service procedure codes to stay aligned per row: %#v", result.Records)
+	}
+}
+
+func TestApplyRowDriverDisablesFieldLevelCartesianExplode(t *testing.T) {
+	spec := Spec{
+		RowDriverPath: "claim.referral.services.service",
+		Fields: []FieldMapping{
+			{From: "claim.referral.services.service.lineNumber", To: "line_number", Transforms: []Transform{{Type: "trim"}}},
+			{
+				From:          "claim.referral.services.service.modifiers.modifier",
+				To:            "modifiers",
+				RepeatMode:    "explode",
+				JoinDelimiter: " | ",
+				Transforms:    []Transform{},
+			},
+		},
+	}
+	input := []formats.Record{{
+		"claim": map[string]any{
+			"referral": map[string]any{
+				"services": map[string]any{
+					"service": []any{
+						map[string]any{
+							"lineNumber": "1",
+							"modifiers": map[string]any{
+								"modifier": []any{"A1", "B2"},
+							},
+						},
+						map[string]any{
+							"lineNumber": "2",
+							"modifiers": map[string]any{
+								"modifier": []any{"C3"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}}
+
+	result, err := Apply(spec, input, nil, ApplyOptions{TargetFormat: "csv"})
+	if err != nil {
+		t.Fatalf("apply row driver with nested array failed: %v", err)
+	}
+
+	if len(result.Records) != 2 {
+		t.Fatalf("expected row-driver output count to stay at 2, got %d", len(result.Records))
+	}
+	if result.Records[0]["modifiers"] != "A1 | B2" || result.Records[1]["modifiers"] != "C3" {
+		t.Fatalf("expected nested arrays to stay within each row-driver item: %#v", result.Records)
+	}
+}
+
+func TestApplyReadsIndexedValuesFromRepeatedBranches(t *testing.T) {
+	spec := Spec{Fields: []FieldMapping{
+		{From: "claim.diagnoses.diagnosis[1].codeValue", To: "diagnosis_code_1", Transforms: []Transform{{Type: "trim"}}},
+		{From: "claim.services.service[2].procedureCode", To: "procedure_code_2", Transforms: []Transform{{Type: "trim"}}},
+	}}
+	input := []formats.Record{{
+		"claim": map[string]any{
+			"diagnoses": map[string]any{
+				"diagnosis": []any{
+					map[string]any{"codeValue": "F84.0"},
+					map[string]any{"codeValue": "E11.9"},
+				},
+			},
+			"services": map[string]any{
+				"service": []any{
+					map[string]any{"procedureCode": "97153"},
+					map[string]any{"procedureCode": "97155"},
+				},
+			},
+		},
+	}}
+
+	result, err := Apply(spec, input, nil, ApplyOptions{})
+	if err != nil {
+		t.Fatalf("apply indexed values failed: %v", err)
+	}
+
+	if value, _ := formats.GetPath(result.Records[0], "diagnosis_code_1"); value != "F84.0" {
+		t.Fatalf("unexpected indexed diagnosis value: %#v", value)
+	}
+	if value, _ := formats.GetPath(result.Records[0], "procedure_code_2"); value != "97155" {
+		t.Fatalf("unexpected indexed procedure value: %#v", value)
+	}
+}

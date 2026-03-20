@@ -50,6 +50,7 @@ export interface PipelineDefinition {
   target: ConnectorConfig;
   mapping: {
     fields: FieldMapping[];
+    rowDriverPath?: string;
   };
   targetSchema?: SchemaDefinition;
 }

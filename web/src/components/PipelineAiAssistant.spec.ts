@@ -10,11 +10,19 @@ const {
   createEngineSpy,
   hasModelInCacheSpy,
   interruptGenerateSpy,
+  audioContextCloseSpy,
+  audioContextResumeSpy,
+  audioContextCreateGainSpy,
+  audioContextCreateOscillatorSpy,
 } = vi.hoisted(() => ({
   createCompletionSpy: vi.fn(),
   createEngineSpy: vi.fn(),
   hasModelInCacheSpy: vi.fn(),
   interruptGenerateSpy: vi.fn(),
+  audioContextCloseSpy: vi.fn(),
+  audioContextResumeSpy: vi.fn(),
+  audioContextCreateGainSpy: vi.fn(),
+  audioContextCreateOscillatorSpy: vi.fn(),
 }));
 
 vi.mock("@mlc-ai/web-llm", () => ({
@@ -119,6 +127,32 @@ beforeEach(() => {
     value: {},
     configurable: true,
   });
+  Object.defineProperty(window, "AudioContext", {
+    value: vi.fn(() => ({
+      state: "running",
+      currentTime: 0,
+      destination: {},
+      resume: audioContextResumeSpy,
+      close: audioContextCloseSpy,
+      createGain: audioContextCreateGainSpy.mockImplementation(() => ({
+        connect: vi.fn(),
+        gain: {
+          setValueAtTime: vi.fn(),
+          exponentialRampToValueAtTime: vi.fn(),
+        },
+      })),
+      createOscillator: audioContextCreateOscillatorSpy.mockImplementation(() => ({
+        type: "sine",
+        frequency: {
+          setValueAtTime: vi.fn(),
+        },
+        connect: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      })),
+    })),
+    configurable: true,
+  });
 });
 
 afterEach(() => {
@@ -126,6 +160,10 @@ afterEach(() => {
   createEngineSpy.mockReset();
   hasModelInCacheSpy.mockReset();
   interruptGenerateSpy.mockReset();
+  audioContextCloseSpy.mockReset();
+  audioContextResumeSpy.mockReset();
+  audioContextCreateGainSpy.mockReset();
+  audioContextCreateOscillatorSpy.mockReset();
 });
 
 it("shows model size metadata and browser cache status", async () => {
@@ -218,6 +256,94 @@ it("assembles streamed chunks into the AI response editor", async () => {
     '{\n  "summary": "Ready",\n  "mappingFields": []\n}',
   );
   expect(wrapper.text()).toContain("Ready");
+  expect(audioContextCreateOscillatorSpy).toHaveBeenCalledTimes(2);
+});
+
+it("retries truncated structured JSON once without streaming before failing the draft", async () => {
+  createCompletionSpy
+    .mockResolvedValueOnce(streamFromChunks(['{"summary":"Par']))
+    .mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: '{"summary":"Recovered","mappingFields":[]}',
+          },
+        },
+      ],
+    });
+
+  const pipeline = defaultPipeline();
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="ai-generate-button"]').trigger("click");
+  await flushPromises();
+  await flushPromises();
+
+  const textareas = wrapper.findAll("textarea");
+  const responseEditor = textareas[textareas.length - 1];
+
+  expect(createCompletionSpy).toHaveBeenCalledTimes(2);
+  expect(createCompletionSpy.mock.calls[1]?.[0]).toEqual(
+    expect.objectContaining({
+      stream: false,
+      response_format: {
+        type: "json_object",
+        schema: structuredAiResponseSchema,
+      },
+    }),
+  );
+  expect((responseEditor.element as HTMLTextAreaElement).value).toBe(
+    '{\n  "summary": "Recovered",\n  "mappingFields": []\n}',
+  );
+  expect(wrapper.text()).toContain("Recovered");
+  expect(wrapper.text()).not.toContain("Structured AI generation failed");
+});
+
+it("formats long elapsed generation durations in minutes and seconds", async () => {
+  vi.useFakeTimers();
+
+  createCompletionSpy.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(streamFromChunks(['{"summary":"Ready","mappingFields":[]}']));
+        }, 125000);
+      }),
+  );
+
+  const pipeline = defaultPipeline();
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="ai-generate-button"]').trigger("click");
+  await vi.advanceTimersByTimeAsync(125000);
+  await flushPromises();
+
+  expect(wrapper.text()).toContain("2m 5s");
+  vi.useRealTimers();
 });
 
 it("cancels a streaming generation and keeps the partial output", async () => {
@@ -437,37 +563,45 @@ it("batches compact mapping requests for wide schemas and merges the batch outpu
     const batchMatch = prompt.match(/batch (\d+) of (\d+)/i);
     const batchIndex = batchMatch ? Number(batchMatch[1]) : 1;
 
-    return Promise.resolve(
-      streamFromChunks([
-        `{"summary":"Batch ${batchIndex} ready","mappingFields":[{"from":"source_${batchIndex}","to":"field_${batchIndex}","transforms":[]}]} `,
-      ]),
-    );
+    return Promise.resolve({
+      choices: [
+        {
+          message: {
+            content: `{"summary":"Batch ${batchIndex} ready","mappingFields":[{"from":"source_${batchIndex}","to":"source_${batchIndex}_normalized","transforms":[]}]} `,
+          },
+        },
+      ],
+    });
   });
 
   const pipeline = defaultPipeline();
   pipeline.mapping.fields = [];
-  pipeline.source.format = "xml";
+  pipeline.source.format = "csv";
   pipeline.target.format = "csv";
   pipeline.targetSchema = {
     type: "object",
     fields: Array.from({ length: 120 }, (_, index) => ({
-      name: `field_${index + 1}`,
+      name: `source_${index + 1}_normalized`,
       type: "string",
-      column: `field_${index + 1}`,
+      column: `source_${index + 1}_normalized`,
       index,
     })),
   };
 
+  const samplePayload = [
+    Array.from({ length: 120 }, (_, index) => `source_${index + 1}`).join(","),
+    Array.from({ length: 120 }, (_, index) => `value_${index + 1}`).join(","),
+  ].join("\n");
+
   const sampleOutput = [
-    Array.from({ length: 120 }, (_, index) => `field_${index + 1}`).join(","),
+    Array.from({ length: 120 }, (_, index) => `source_${index + 1}_normalized`).join(","),
     Array.from({ length: 120 }, (_, index) => `value_${index + 1}`).join(","),
   ].join("\n");
 
   const wrapper = mount(PipelineAiAssistant, {
     props: {
       pipeline,
-      samplePayload:
-        "<root><claim><id>1</id><name>Ada</name><amount>12.5</amount></claim></root>",
+      samplePayload,
       sampleOutput,
       autoApplyStructured: true,
       "onUpdate:pipeline": () => undefined,
@@ -485,11 +619,18 @@ it("batches compact mapping requests for wide schemas and merges the batch outpu
   await flushPromises();
 
   expect(createCompletionSpy.mock.calls.length).toBeGreaterThan(1);
+  expect(
+    createCompletionSpy.mock.calls.every(
+      ([request]) =>
+        request.stream === false &&
+        request.response_format?.type === "json_object",
+    ),
+  ).toBe(true);
   expect(wrapper.text()).toContain("Completed");
   expect(pipeline.mapping.fields).toEqual(
     Array.from({ length: createCompletionSpy.mock.calls.length }, (_, index) => ({
       from: `source_${index + 1}`,
-      to: `field_${index + 1}`,
+      to: `source_${index + 1}_normalized`,
       transforms: [],
     })),
   );

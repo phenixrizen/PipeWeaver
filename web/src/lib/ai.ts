@@ -363,7 +363,7 @@ const promptSafetyMarginTokens = 384;
 const compactPromptCharThreshold = 8000;
 const rawSampleCharThreshold = 3000;
 const maxCompactExcerptChars = 900;
-const maxCompactTargetsPerBatch = 32;
+const maxCompactTargetsPerBatch = 16;
 
 const estimatePromptTokens = (prompt: string) =>
   Math.max(1, Math.ceil(prompt.length / 3));
@@ -516,7 +516,10 @@ const collectUnresolvedTargetCandidates = (
   );
 
   return rankTargetMatches(sourceFields, targetFields).filter(
-    (resolution) => !lockedTargets.has(resolution.target),
+    (resolution) =>
+      !lockedTargets.has(resolution.target) &&
+      resolution.bucket === "suggested" &&
+      resolution.candidates.length > 0,
   );
 };
 

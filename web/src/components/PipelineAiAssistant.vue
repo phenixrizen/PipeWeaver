@@ -38,6 +38,7 @@ const props = withDefaults(
     autoApplyStructured?: boolean;
     hideApplyActions?: boolean;
     lockTargetSchema?: boolean;
+    forcedMode?: AiDraftMode;
     generateLabel?: string;
     hidePromptEditors?: boolean;
     hideSummaryPanel?: boolean;
@@ -48,6 +49,7 @@ const props = withDefaults(
     autoApplyStructured: false,
     hideApplyActions: false,
     lockTargetSchema: false,
+    forcedMode: undefined,
     generateLabel: "Generate draft",
     hidePromptEditors: false,
     hideSummaryPanel: false,
@@ -66,6 +68,7 @@ const loadStatus = ref("Idle");
 const progressStep = ref("Idle");
 const progressText = ref("");
 const errorMessage = ref("");
+const warningMessages = ref<string[]>([]);
 const isModelReady = ref(false);
 const browserCacheStatus = ref<"checking" | "cached" | "missing" | "unavailable">(
   "checking",
@@ -78,6 +81,7 @@ const elapsedSeconds = ref(0);
 
 let elapsedTimer: number | undefined;
 let modelCacheStatusRequestId = 0;
+let completionAudioContext: AudioContext | null = null;
 
 let engine:
   | {
@@ -122,9 +126,26 @@ const selectedModelOption = computed(
   () => aiModelOptions.find((option) => option.id === selectedModel.value) ?? aiModelOptions[0],
 );
 
-const elapsedLabel = computed(() =>
-  elapsedSeconds.value > 0 ? `${elapsedSeconds.value}s` : "Not running",
-);
+const formatElapsedDuration = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "Not running";
+  }
+
+  const wholeSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const remainingSeconds = wholeSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${remainingSeconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  return `${remainingSeconds}s`;
+};
+
+const elapsedLabel = computed(() => formatElapsedDuration(elapsedSeconds.value));
 
 const browserCacheStatusLabel = computed(() => {
   switch (browserCacheStatus.value) {
@@ -169,7 +190,7 @@ const generateButtonLabel = computed(() => {
   }
 
   if (progressStep.value === "Running local inference") {
-    return `Generating... ${elapsedSeconds.value}s`;
+    return `Generating... ${formatElapsedDuration(elapsedSeconds.value)}`;
   }
 
   return `${progressStep.value}...`;
@@ -232,11 +253,57 @@ const updateProgress = (status: string, step: string, detail: string) => {
   progressText.value = detail;
 };
 
+const playCompletionDing = async () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const AudioContextCtor =
+    window.AudioContext ||
+    // @ts-expect-error Safari still exposes webkitAudioContext.
+    window.webkitAudioContext;
+
+  if (!AudioContextCtor) {
+    return;
+  }
+
+  try {
+    completionAudioContext ??= new AudioContextCtor();
+    if (completionAudioContext.state === "suspended") {
+      await completionAudioContext.resume();
+    }
+
+    const startAt = completionAudioContext.currentTime + 0.01;
+    const gain = completionAudioContext.createGain();
+    gain.connect(completionAudioContext.destination);
+    gain.gain.setValueAtTime(0.0001, startAt);
+    gain.gain.exponentialRampToValueAtTime(0.05, startAt + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.22);
+
+    const firstTone = completionAudioContext.createOscillator();
+    firstTone.type = "sine";
+    firstTone.frequency.setValueAtTime(880, startAt);
+    firstTone.connect(gain);
+    firstTone.start(startAt);
+    firstTone.stop(startAt + 0.11);
+
+    const secondTone = completionAudioContext.createOscillator();
+    secondTone.type = "sine";
+    secondTone.frequency.setValueAtTime(1174.66, startAt + 0.11);
+    secondTone.connect(gain);
+    secondTone.start(startAt + 0.11);
+    secondTone.stop(startAt + 0.22);
+  } catch {
+    // Best-effort notification only.
+  }
+};
+
 const resetResponse = () => {
   responseText.value = "";
   summary.value = "";
   parsedResponse.value = null;
   errorMessage.value = "";
+  warningMessages.value = [];
   cancelRequested.value = false;
   lastPromptBuild = undefined;
 };
@@ -289,22 +356,39 @@ const runGenerationBatch = async (options: {
   maxTokens: number;
   batchIndex: number;
   totalBatches: number;
+  stream?: boolean;
+  retrying?: boolean;
 }) => {
   if (!engine) {
     throw new Error("The local model is not loaded.");
   }
 
-  const { prompt, maxTokens, batchIndex, totalBatches } = options;
+  const {
+    prompt,
+    maxTokens,
+    batchIndex,
+    totalBatches,
+    stream = true,
+    retrying = false,
+  } = options;
   const batchLabel =
     totalBatches > 1 ? `batch ${batchIndex} of ${totalBatches}` : "request";
+  const shouldStreamBatch =
+    stream && (!isStructuredMode.value || totalBatches === 1) && !retrying;
 
   requestPreview.value = prompt;
   updateProgress(
     "Generating",
-    totalBatches > 1
-      ? `Submitting batch ${batchIndex} of ${totalBatches}`
-      : "Submitting prompt",
-    `Sending ${batchLabel} to the local model.`,
+    retrying
+      ? totalBatches > 1
+        ? `Retrying batch ${batchIndex} of ${totalBatches}`
+        : "Retrying prompt"
+      : totalBatches > 1
+        ? `Submitting batch ${batchIndex} of ${totalBatches}`
+        : "Submitting prompt",
+    retrying
+      ? `Retrying ${batchLabel} with a non-streaming structured request.`
+      : `Sending ${batchLabel} to the local model.`,
   );
 
   const completion = await engine.instance.chat.completions.create({
@@ -321,7 +405,7 @@ const runGenerationBatch = async (options: {
       },
     ],
     max_tokens: maxTokens,
-    stream: true,
+    stream: shouldStreamBatch,
     temperature: 0.2,
     ...(isStructuredMode.value
       ? {
@@ -337,7 +421,7 @@ const runGenerationBatch = async (options: {
   let wasCancelled = false;
   responseText.value = "";
 
-  if (isAsyncIterable(completion)) {
+  if (shouldStreamBatch && isAsyncIterable(completion)) {
     updateProgress(
       "Generating",
       totalBatches > 1
@@ -377,7 +461,26 @@ const runGenerationBatch = async (options: {
       }
     }
   } else {
-    batchResponseText = completion.choices[0]?.message.content ?? "";
+    updateProgress(
+      "Generating",
+      retrying
+        ? totalBatches > 1
+          ? `Retrying batch ${batchIndex} of ${totalBatches}`
+          : "Retrying prompt"
+        : totalBatches > 1
+          ? `Waiting for batch ${batchIndex} of ${totalBatches}`
+          : "Waiting for model response",
+      retrying
+        ? `Waiting for the non-streaming structured retry for ${batchLabel}.`
+        : shouldStreamBatch
+          ? `Finalizing ${batchLabel}.`
+          : `Waiting for the local model to finish ${batchLabel} before parsing the structured JSON.`,
+    );
+    const nonStreamingCompletion = completion as {
+      choices: { message: { content?: string | null } }[];
+    };
+    batchResponseText =
+      nonStreamingCompletion.choices[0]?.message.content ?? "";
     responseText.value = batchResponseText;
   }
 
@@ -385,6 +488,94 @@ const runGenerationBatch = async (options: {
     wasCancelled: wasCancelled || cancelRequested.value,
     responseText: batchResponseText.trim(),
   };
+};
+
+const shouldRetryStructuredBatch = (error: unknown, responseText: string) => {
+  if (!isStructuredMode.value) {
+    return false;
+  }
+
+  if (!responseText.trim()) {
+    return true;
+  }
+
+  const message =
+    error instanceof Error ? error.message : String(error ?? "Unknown error");
+
+  return (
+    error instanceof SyntaxError ||
+    /Unexpected end of JSON input/i.test(message) ||
+    /unterminated string/i.test(message) ||
+    /expected ',' or '}'/i.test(message) ||
+    /JSON/i.test(message) ||
+    /valid summary/i.test(message)
+  );
+};
+
+const parseStructuredBatchWithRetry = async (options: {
+  batchIndex: number;
+  totalBatches: number;
+  prompt: string;
+  maxTokens: number;
+  responseText: string;
+}) => {
+  const { batchIndex, totalBatches, prompt, maxTokens, responseText } = options;
+
+  try {
+    return {
+      parsed: parseAiResponse(responseText),
+      responseText: normalizeStructuredAiResponseText(responseText),
+      warning: "",
+      wasCancelled: false,
+    };
+  } catch (error) {
+    if (!shouldRetryStructuredBatch(error, responseText)) {
+      throw error;
+    }
+
+    const retryResult = await runGenerationBatch({
+      prompt,
+      maxTokens,
+      batchIndex,
+      totalBatches,
+      stream: false,
+      retrying: true,
+    });
+
+    if (retryResult.wasCancelled) {
+      return {
+        parsed: null,
+        responseText,
+        warning: "",
+        wasCancelled: true,
+      };
+    }
+
+    try {
+      return {
+        parsed: parseAiResponse(retryResult.responseText),
+        responseText: normalizeStructuredAiResponseText(retryResult.responseText),
+        warning: "",
+        wasCancelled: false,
+      };
+    } catch (retryError) {
+      const retryMessage =
+        retryError instanceof Error
+          ? retryError.message
+          : String(retryError ?? "Unknown error");
+      return {
+        parsed: null,
+        responseText: normalizeStructuredAiResponseText(
+          retryResult.responseText || responseText,
+        ),
+        warning:
+          totalBatches > 1
+            ? `Skipped batch ${batchIndex} of ${totalBatches}: ${retryMessage}`
+            : `Skipped the structured AI response: ${retryMessage}`,
+        wasCancelled: false,
+      };
+    }
+  }
 };
 
 const refreshModelCacheStatus = async () => {
@@ -413,6 +604,17 @@ watch(selectedMode, (mode) => {
   instructionText.value = defaultAiInstruction(mode, pipeline.value);
   resetResponse();
 });
+
+watch(
+  () => props.forcedMode,
+  (mode) => {
+    if (!mode || selectedMode.value === mode) {
+      return;
+    }
+    selectedMode.value = mode;
+  },
+  { immediate: true },
+);
 
 watch(
   selectedModel,
@@ -452,6 +654,8 @@ watch(
 
 onBeforeUnmount(() => {
   stopElapsedTimer();
+  void completionAudioContext?.close();
+  completionAudioContext = null;
 });
 
 const loadModel = async () => {
@@ -605,7 +809,7 @@ const generateDraft = async () => {
         updateProgress(
           "Generation cancelled",
           "Generation cancelled",
-          `Stopped after ${elapsedSeconds.value}s. Partial output remains in the response editor.`,
+          `Stopped after ${formatElapsedDuration(elapsedSeconds.value)}. Partial output remains in the response editor.`,
         );
         return;
       }
@@ -625,7 +829,32 @@ const generateDraft = async () => {
       );
 
       if (isStructuredMode.value) {
-        structuredResponses.push(parseAiResponse(batchResult.responseText));
+        const parsedBatch = await parseStructuredBatchWithRetry({
+          batchIndex: batch.batchIndex,
+          totalBatches: batch.totalBatches,
+          prompt: batch.prompt,
+          maxTokens: batch.effectiveMaxTokens,
+          responseText: batchResult.responseText,
+        });
+
+        if (parsedBatch.wasCancelled) {
+          updateProgress(
+            "Generation cancelled",
+            "Generation cancelled",
+            `Stopped after ${formatElapsedDuration(elapsedSeconds.value)}. Partial output remains in the response editor.`,
+          );
+          return;
+        }
+
+        responseText.value = parsedBatch.responseText;
+        if (parsedBatch.warning) {
+          warningMessages.value.push(parsedBatch.warning);
+          continue;
+        }
+
+        if (parsedBatch.parsed) {
+          structuredResponses.push(parsedBatch.parsed);
+        }
       } else {
         explainResponses.push(batchResult.responseText);
       }
@@ -635,19 +864,32 @@ const generateDraft = async () => {
       updateProgress(
         "Generation cancelled",
         "Generation cancelled",
-        `Stopped after ${elapsedSeconds.value}s. Partial output remains in the response editor.`,
+        `Stopped after ${formatElapsedDuration(elapsedSeconds.value)}. Partial output remains in the response editor.`,
       );
       return;
     }
 
     if (isStructuredMode.value) {
-      parsedResponse.value = aggregateStructuredResponses(
-        structuredResponses,
-        totalBatches,
-      );
-      responseText.value = JSON.stringify(parsedResponse.value, null, 2);
-      summary.value = parsedResponse.value.summary;
-      if (props.autoApplyStructured) {
+      if (structuredResponses.length > 0) {
+        parsedResponse.value = aggregateStructuredResponses(
+          structuredResponses,
+          totalBatches,
+        );
+        responseText.value = JSON.stringify(parsedResponse.value, null, 2);
+        summary.value = parsedResponse.value.summary;
+      } else {
+        parsedResponse.value = null;
+        summary.value =
+          warningMessages.value.length > 0
+            ? "Local matching applied. The structured AI fallback returned incomplete JSON and was skipped."
+            : "Draft ready.";
+      }
+
+      if (warningMessages.value.length > 0) {
+        summary.value = `${summary.value} ${warningMessages.value.join(" ")}`.trim();
+      }
+
+      if (props.autoApplyStructured && parsedResponse.value) {
         applyAll();
       }
     } else {
@@ -662,10 +904,19 @@ const generateDraft = async () => {
       responseText: responseText.value,
       parsedResponse: parsedResponse.value,
     });
+    void playCompletionDing();
     updateProgress(
-      isStructuredMode.value ? "Draft ready" : "Explanation ready",
-      isStructuredMode.value ? "Draft ready" : "Explanation ready",
-      `${isStructuredMode.value ? "Draft" : "Explanation"} generated locally in ${elapsedSeconds.value}s${totalBatches > 1 ? ` across ${totalBatches} batches` : ""}.`,
+      isStructuredMode.value
+        ? warningMessages.value.length > 0
+          ? "Draft ready with warnings"
+          : "Draft ready"
+        : "Explanation ready",
+      isStructuredMode.value
+        ? warningMessages.value.length > 0
+          ? "Draft ready with warnings"
+          : "Draft ready"
+        : "Explanation ready",
+      `${isStructuredMode.value ? "Draft" : "Explanation"} generated locally in ${formatElapsedDuration(elapsedSeconds.value)}${totalBatches > 1 ? ` across ${totalBatches} batches` : ""}.${warningMessages.value.length > 0 ? ` ${warningMessages.value.join(" ")}` : ""}`,
     );
   } catch (error) {
     updateProgress(
@@ -830,7 +1081,11 @@ const applyAll = () => {
 
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Draft task</span>
-        <select v-model="selectedMode" class="input">
+        <select
+          v-model="selectedMode"
+          class="input"
+          :disabled="Boolean(forcedMode)"
+        >
           <option
             v-for="(label, mode) in aiModeLabels"
             :key="mode"
@@ -839,6 +1094,12 @@ const applyAll = () => {
             {{ label }}
           </option>
         </select>
+        <p
+          v-if="forcedMode"
+          class="text-xs leading-5 text-slate-500"
+        >
+          Locked for this flow to keep the local fallback focused.
+        </p>
       </label>
 
       <label class="space-y-2 text-sm font-medium text-slate-700">
