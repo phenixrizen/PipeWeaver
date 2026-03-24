@@ -45,6 +45,7 @@ export interface PipelineDefinition {
     id: string;
     name: string;
     description?: string;
+    aiContext?: string;
   };
   source: ConnectorConfig;
   target: ConnectorConfig;

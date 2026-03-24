@@ -158,3 +158,50 @@ mapping:
 		t.Fatalf("expected copied output asset at %s: %v", expectedOutputPath, err)
 	}
 }
+
+func TestDeleteRemovesStoredPipeline(t *testing.T) {
+	store, err := NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new filesystem store failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(store.Root, "alpha.yaml"), []byte(`pipeline:
+  id: alpha
+  name: Alpha
+source:
+  type: http
+  format: csv
+target:
+  type: stdout
+  format: json
+mapping:
+  fields:
+    - from: id
+      to: id
+`), 0o644); err != nil {
+		t.Fatalf("write stored pipeline failed: %v", err)
+	}
+
+	if err := store.Delete("alpha"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	if _, err := store.Get("alpha"); err == nil {
+		t.Fatal("expected deleted pipeline lookup to fail")
+	}
+}
+
+func TestDeleteMissingPipelineReturnsNotExist(t *testing.T) {
+	store, err := NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new filesystem store failed: %v", err)
+	}
+
+	err = store.Delete("missing")
+	if err == nil {
+		t.Fatal("expected delete missing pipeline to fail")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected not-exist error, got %v", err)
+	}
+}

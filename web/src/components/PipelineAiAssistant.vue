@@ -1,17 +1,23 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import AppSelect from "./AppSelect.vue";
 import MonacoCodeEditor from "./MonacoCodeEditor.vue";
 import {
   aiModeLabels,
   aiModelOptions,
   buildAiRequest,
+  buildLikelyMatchReviewPrompt,
   defaultAiInstruction,
   isStructuredAiMode,
+  likelyMatchReviewResponseSchema,
   normalizeStructuredAiResponseText,
   parseAiResponse,
+  parseLikelyMatchReview,
   structuredAiResponseSchema,
+  type AiAssistantProgress,
   type AiDraftMode,
   type AiDraftResponse,
+  type AiLikelyMatchReview,
   type AiPromptBuildResult,
 } from "../lib/ai";
 import { loadWebLLM } from "../lib/webllm";
@@ -30,6 +36,7 @@ const emit = defineEmits<{
       parsedResponse: AiDraftResponse | null;
     },
   ];
+  progress: [progress: AiAssistantProgress];
 }>();
 const props = withDefaults(
   defineProps<{
@@ -39,9 +46,11 @@ const props = withDefaults(
     hideApplyActions?: boolean;
     lockTargetSchema?: boolean;
     forcedMode?: AiDraftMode;
+    defaultModelId?: string;
     generateLabel?: string;
     hidePromptEditors?: boolean;
     hideSummaryPanel?: boolean;
+    hideStatusPanel?: boolean;
     hideResponseEditor?: boolean;
   }>(),
   {
@@ -50,14 +59,23 @@ const props = withDefaults(
     hideApplyActions: false,
     lockTargetSchema: false,
     forcedMode: undefined,
+    defaultModelId: undefined,
     generateLabel: "Generate draft",
     hidePromptEditors: false,
     hideSummaryPanel: false,
+    hideStatusPanel: false,
     hideResponseEditor: false,
   },
 );
 
-const selectedModel = ref(aiModelOptions[0].id);
+type LikelyMatchReviewRequest = {
+  targetPath: string;
+  candidateSource: string;
+  sourceSamplePreview: string;
+  targetSamplePreview: string;
+};
+
+const selectedModel = ref(props.defaultModelId ?? aiModelOptions[0].id);
 const selectedMode = ref<AiDraftMode>("studio");
 const maxTokens = ref(1200);
 const instructionText = ref(defaultAiInstruction(selectedMode.value, pipeline.value));
@@ -76,6 +94,8 @@ const browserCacheStatus = ref<"checking" | "cached" | "missing" | "unavailable"
 const isBusy = ref(false);
 const cancelRequested = ref(false);
 const parsedResponse = ref<AiDraftResponse | null>(null);
+const currentRunMode = ref<AiDraftMode | null>(null);
+const scopedTargetPaths = ref<string[]>([]);
 
 const elapsedSeconds = ref(0);
 
@@ -121,9 +141,36 @@ let lastPromptBuild: AiPromptBuildResult | undefined;
 const canUseWebGpu = computed(
   () => typeof navigator !== "undefined" && "gpu" in navigator,
 );
-const isStructuredMode = computed(() => isStructuredAiMode(selectedMode.value));
+const resolvedMode = computed(
+  () => currentRunMode.value ?? props.forcedMode ?? selectedMode.value,
+);
+const isStructuredMode = computed(() => isStructuredAiMode(resolvedMode.value));
+const exposedBusy = computed(() => isBusy.value || currentRunMode.value !== null);
+const scopedTargetLabel = computed(() => {
+  if (!scopedTargetPaths.value.length) {
+    return "";
+  }
+
+  if (scopedTargetPaths.value.length === 1) {
+    return scopedTargetPaths.value[0] ?? "";
+  }
+
+  return `${scopedTargetPaths.value.length} targets`;
+});
 const selectedModelOption = computed(
   () => aiModelOptions.find((option) => option.id === selectedModel.value) ?? aiModelOptions[0],
+);
+const modelSelectOptions = computed(() =>
+  aiModelOptions.map((option) => ({
+    value: option.id,
+    label: option.dropdownLabel,
+  })),
+);
+const modeSelectOptions = computed(() =>
+  Object.entries(aiModeLabels).map(([mode, label]) => ({
+    value: mode as AiDraftMode,
+    label,
+  })),
 );
 
 const formatElapsedDuration = (seconds: number) => {
@@ -146,6 +193,14 @@ const formatElapsedDuration = (seconds: number) => {
 };
 
 const elapsedLabel = computed(() => formatElapsedDuration(elapsedSeconds.value));
+const countApproximateWords = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 0;
+  }
+
+  return trimmed.split(/\s+/).length;
+};
 
 const browserCacheStatusLabel = computed(() => {
   switch (browserCacheStatus.value) {
@@ -161,19 +216,19 @@ const browserCacheStatusLabel = computed(() => {
 });
 
 const responseEditorLabel = computed(() =>
-  isStructuredMode.value ? "AI JSON response" : "AI explanation",
+  isStructuredAiMode(resolvedMode.value) ? "AI JSON response" : "AI explanation",
 );
 
 const responseEditorLanguage = computed(() =>
-  isStructuredMode.value ? "json" : "markdown",
+  isStructuredAiMode(resolvedMode.value) ? "json" : "markdown",
 );
 
 const summaryLabel = computed(() =>
-  isStructuredMode.value ? "AI summary" : "Explanation overview",
+  isStructuredAiMode(resolvedMode.value) ? "AI summary" : "Explanation overview",
 );
 
 const summaryFallbackText = computed(() =>
-  isStructuredMode.value
+  isStructuredAiMode(resolvedMode.value)
     ? "Generate a draft to see a structured summary here."
     : "Generate an explanation to see the operator-facing overview here.",
 );
@@ -195,6 +250,22 @@ const generateButtonLabel = computed(() => {
 
   return `${progressStep.value}...`;
 });
+
+const assistantProgress = computed<AiAssistantProgress>(() => ({
+  busy: exposedBusy.value,
+  status: loadStatus.value,
+  step: progressStep.value,
+  elapsedSeconds: elapsedSeconds.value,
+  elapsedLabel: elapsedLabel.value,
+  detail: progressText.value,
+  responseText: responseText.value,
+  wordsReceived: countApproximateWords(responseText.value),
+  errorMessage: errorMessage.value,
+  modelId: selectedModel.value,
+  modelLabel: selectedModelOption.value.dropdownLabel,
+  scopedTargetLabel: scopedTargetLabel.value,
+  canCancel: canCancelGeneration.value,
+}));
 
 const normalizedMaxTokens = computed(() => {
   const numericValue = Number(maxTokens.value);
@@ -356,6 +427,9 @@ const runGenerationBatch = async (options: {
   maxTokens: number;
   batchIndex: number;
   totalBatches: number;
+  responseSchema?: string;
+  structuredRequest?: boolean;
+  systemPrompt?: string;
   stream?: boolean;
   retrying?: boolean;
 }) => {
@@ -368,13 +442,18 @@ const runGenerationBatch = async (options: {
     maxTokens,
     batchIndex,
     totalBatches,
+    responseSchema = structuredAiResponseSchema,
+    structuredRequest = isStructuredMode.value,
+    systemPrompt = structuredRequest
+      ? "You are PipeWeaver Studio AI. Produce practical mapping drafts for ETL operators. Return exactly one JSON object that follows the provided schema. Do not include markdown fences or commentary."
+      : "You are PipeWeaver Studio AI. Explain ETL pipelines for operators in concise markdown. Do not return JSON unless the user explicitly asks for it.",
     stream = true,
     retrying = false,
   } = options;
   const batchLabel =
     totalBatches > 1 ? `batch ${batchIndex} of ${totalBatches}` : "request";
   const shouldStreamBatch =
-    stream && (!isStructuredMode.value || totalBatches === 1) && !retrying;
+    stream && (!structuredRequest || totalBatches === 1) && !retrying;
 
   requestPreview.value = prompt;
   updateProgress(
@@ -395,9 +474,7 @@ const runGenerationBatch = async (options: {
     messages: [
       {
         role: "system",
-        content: isStructuredMode.value
-          ? "You are PipeWeaver Studio AI. Produce practical mapping drafts for ETL operators. Return exactly one JSON object that follows the provided schema. Do not include markdown fences or commentary."
-          : "You are PipeWeaver Studio AI. Explain ETL pipelines for operators in concise markdown. Do not return JSON unless the user explicitly asks for it.",
+        content: systemPrompt,
       },
       {
         role: "user",
@@ -407,11 +484,11 @@ const runGenerationBatch = async (options: {
     max_tokens: maxTokens,
     stream: shouldStreamBatch,
     temperature: 0.2,
-    ...(isStructuredMode.value
+    ...(structuredRequest
       ? {
           response_format: {
             type: "json_object" as const,
-            schema: structuredAiResponseSchema,
+            schema: responseSchema,
           },
         }
       : {}),
@@ -490,8 +567,12 @@ const runGenerationBatch = async (options: {
   };
 };
 
-const shouldRetryStructuredBatch = (error: unknown, responseText: string) => {
-  if (!isStructuredMode.value) {
+const shouldRetryStructuredBatch = (
+  error: unknown,
+  responseText: string,
+  structuredRequest = isStructuredMode.value,
+) => {
+  if (!structuredRequest) {
     return false;
   }
 
@@ -512,24 +593,36 @@ const shouldRetryStructuredBatch = (error: unknown, responseText: string) => {
   );
 };
 
-const parseStructuredBatchWithRetry = async (options: {
+const parseStructuredBatchWithRetry = async <T>(options: {
   batchIndex: number;
   totalBatches: number;
   prompt: string;
   maxTokens: number;
   responseText: string;
+  responseSchema?: string;
+  warningPrefix?: string;
+  parseResponse: (raw: string) => T;
 }) => {
-  const { batchIndex, totalBatches, prompt, maxTokens, responseText } = options;
+  const {
+    batchIndex,
+    totalBatches,
+    prompt,
+    maxTokens,
+    responseText,
+    responseSchema = structuredAiResponseSchema,
+    warningPrefix = "structured AI response",
+    parseResponse,
+  } = options;
 
   try {
     return {
-      parsed: parseAiResponse(responseText),
+      parsed: parseResponse(responseText),
       responseText: normalizeStructuredAiResponseText(responseText),
       warning: "",
       wasCancelled: false,
     };
   } catch (error) {
-    if (!shouldRetryStructuredBatch(error, responseText)) {
+    if (!shouldRetryStructuredBatch(error, responseText, true)) {
       throw error;
     }
 
@@ -538,6 +631,8 @@ const parseStructuredBatchWithRetry = async (options: {
       maxTokens,
       batchIndex,
       totalBatches,
+      responseSchema,
+      structuredRequest: true,
       stream: false,
       retrying: true,
     });
@@ -553,7 +648,7 @@ const parseStructuredBatchWithRetry = async (options: {
 
     try {
       return {
-        parsed: parseAiResponse(retryResult.responseText),
+        parsed: parseResponse(retryResult.responseText),
         responseText: normalizeStructuredAiResponseText(retryResult.responseText),
         warning: "",
         wasCancelled: false,
@@ -571,7 +666,7 @@ const parseStructuredBatchWithRetry = async (options: {
         warning:
           totalBatches > 1
             ? `Skipped batch ${batchIndex} of ${totalBatches}: ${retryMessage}`
-            : `Skipped the structured AI response: ${retryMessage}`,
+            : `Skipped the ${warningPrefix}: ${retryMessage}`,
         wasCancelled: false,
       };
     }
@@ -604,6 +699,17 @@ watch(selectedMode, (mode) => {
   instructionText.value = defaultAiInstruction(mode, pipeline.value);
   resetResponse();
 });
+
+watch(
+  () => props.defaultModelId,
+  (modelId) => {
+    if (!modelId || selectedModel.value === modelId || isBusy.value) {
+      return;
+    }
+
+    selectedModel.value = modelId;
+  },
+);
 
 watch(
   () => props.forcedMode,
@@ -650,6 +756,14 @@ watch(
       pipeline.value,
     );
   },
+);
+
+watch(
+  assistantProgress,
+  (progress) => {
+    emit("progress", progress);
+  },
+  { immediate: true },
 );
 
 onBeforeUnmount(() => {
@@ -717,67 +831,97 @@ const loadModel = async () => {
   }
 };
 
-const generateDraft = async () => {
+const generateDraft = async (options?: {
+  mode?: AiDraftMode;
+  targetScope?: string[];
+}) => {
+  if (isBusy.value) {
+    return;
+  }
+
+  const normalizedTargetScope = Array.from(
+    new Set(
+      (options?.targetScope ?? [])
+        .map((targetPath) => targetPath.trim())
+        .filter((targetPath) => targetPath.length > 0),
+    ),
+  );
+  const runMode = normalizedTargetScope.length
+    ? "mapping"
+    : options?.mode ?? props.forcedMode ?? selectedMode.value;
+  const authorPrompt =
+    runMode !== selectedMode.value &&
+    instructionText.value === defaultAiInstruction(selectedMode.value, pipeline.value)
+      ? defaultAiInstruction(runMode, pipeline.value)
+      : instructionText.value;
+
   resetResponse();
   elapsedSeconds.value = 0;
+  currentRunMode.value = runMode;
+  scopedTargetPaths.value = normalizedTargetScope;
   updateProgress(
     "Preparing request",
     "Building request payload",
-    "Collecting the current pipeline, sample payload, and operator prompt.",
+    normalizedTargetScope.length
+      ? `Collecting the current pipeline, sample payload, and operator prompt for ${normalizedTargetScope.length === 1 ? normalizedTargetScope[0] : `${normalizedTargetScope.length} selected targets`}.`
+      : "Collecting the current pipeline, sample payload, and operator prompt.",
   );
-
-  lastPromptBuild = buildAiRequest({
-    mode: selectedMode.value,
-    pipeline: pipeline.value,
-    samplePayload: props.samplePayload,
-    sampleOutput: props.sampleOutput,
-    authorPrompt: instructionText.value,
-    requestedMaxTokens: normalizedMaxTokens.value,
-    contextWindowSize: selectedModelOption.value.contextWindowSize,
-  });
-  requestPreview.value = lastPromptBuild.prompt;
-
-  updateProgress(
-    "Preparing request",
-    "Request payload ready",
-    `${lastPromptBuild.statusNote} Built a ${requestPreview.value.length.toLocaleString()} character ${lastPromptBuild.promptMode} request with an estimated ${lastPromptBuild.estimatedPromptTokens.toLocaleString()} prompt tokens and a ${lastPromptBuild.effectiveMaxTokens.toLocaleString()} token response budget.`,
-  );
-
-  if (lastPromptBuild.promptMode === "unfit") {
-    summary.value = lastPromptBuild.statusNote;
-    emit("generated", {
-      mode: selectedMode.value,
-      structured: isStructuredMode.value,
-      summary: summary.value,
-      responseText: "",
-      parsedResponse: null,
-    });
-    updateProgress("Ready", "AI skipped", lastPromptBuild.statusNote);
-    return;
-  }
-
-  if (!isModelReady.value) {
-    updateProgress(
-      "Preparing request",
-      "Ensuring model is loaded",
-      "The selected model is not ready yet, so the browser is loading it first.",
-    );
-    await loadModel();
-  }
-
-  if (!engine) {
-    return;
-  }
-
-  isBusy.value = true;
-  updateProgress(
-    "Generating",
-    "Submitting prompt",
-    "Sending the request payload to the local model.",
-  );
-  startElapsedTimer();
 
   try {
+    lastPromptBuild = buildAiRequest({
+      mode: runMode,
+      pipeline: pipeline.value,
+      samplePayload: props.samplePayload,
+      sampleOutput: props.sampleOutput,
+      authorPrompt,
+      targetScope: normalizedTargetScope,
+      requestedMaxTokens: normalizedMaxTokens.value,
+      contextWindowSize: selectedModelOption.value.contextWindowSize,
+    });
+    requestPreview.value = lastPromptBuild.prompt;
+
+    updateProgress(
+      "Preparing request",
+      "Request payload ready",
+      `${lastPromptBuild.statusNote} Built a ${requestPreview.value.length.toLocaleString()} character ${lastPromptBuild.promptMode} request with an estimated ${lastPromptBuild.estimatedPromptTokens.toLocaleString()} prompt tokens and a ${lastPromptBuild.effectiveMaxTokens.toLocaleString()} token response budget.`,
+    );
+
+    if (lastPromptBuild.promptMode === "unfit") {
+      summary.value = lastPromptBuild.statusNote;
+      emit("generated", {
+        mode: runMode,
+        structured: isStructuredAiMode(runMode),
+        summary: summary.value,
+        responseText: "",
+        parsedResponse: null,
+      });
+      updateProgress("Ready", "AI skipped", lastPromptBuild.statusNote);
+      return;
+    }
+
+    if (!isModelReady.value) {
+      updateProgress(
+        "Preparing request",
+        "Ensuring model is loaded",
+        "The selected model is not ready yet, so the browser is loading it first.",
+      );
+      await loadModel();
+    }
+
+    if (!engine) {
+      return;
+    }
+
+    isBusy.value = true;
+    updateProgress(
+      "Generating",
+      "Submitting prompt",
+      normalizedTargetScope.length
+        ? `Sending the scoped request for ${normalizedTargetScope.length === 1 ? normalizedTargetScope[0] : `${normalizedTargetScope.length} targets`} to the local model.`
+        : "Sending the request payload to the local model.",
+    );
+    startElapsedTimer();
+
     const promptBatches = lastPromptBuild.batches;
     const totalBatches = promptBatches.length;
     const structuredResponses: AiDraftResponse[] = [];
@@ -835,6 +979,7 @@ const generateDraft = async () => {
           prompt: batch.prompt,
           maxTokens: batch.effectiveMaxTokens,
           responseText: batchResult.responseText,
+          parseResponse: parseAiResponse,
         });
 
         if (parsedBatch.wasCancelled) {
@@ -898,7 +1043,7 @@ const generateDraft = async () => {
       summary.value = summarizeExplainResponse(responseText.value);
     }
     emit("generated", {
-      mode: selectedMode.value,
+      mode: runMode,
       structured: isStructuredMode.value,
       summary: summary.value,
       responseText: responseText.value,
@@ -935,7 +1080,159 @@ const generateDraft = async () => {
   } finally {
     stopElapsedTimer();
     isBusy.value = false;
+    currentRunMode.value = null;
+    scopedTargetPaths.value = [];
   }
+};
+
+const generateForTargets = async (targetPaths: string[]) => {
+  await generateDraft({
+    mode: "mapping",
+    targetScope: targetPaths,
+  });
+};
+
+const reviewSuggestedMatch = async (
+  options: LikelyMatchReviewRequest,
+): Promise<AiLikelyMatchReview | null> => {
+  if (isBusy.value) {
+    return null;
+  }
+
+  const targetPath = options.targetPath.trim();
+  if (!targetPath) {
+    return null;
+  }
+
+  resetResponse();
+  elapsedSeconds.value = 0;
+  currentRunMode.value = "mapping";
+  scopedTargetPaths.value = [targetPath];
+  updateProgress(
+    "Preparing review",
+    "Building field review prompt",
+    `Collecting the displayed best local candidate for ${targetPath}.`,
+  );
+
+  try {
+    const reviewMaxTokens = Math.min(normalizedMaxTokens.value, 160);
+    const prompt = buildLikelyMatchReviewPrompt({
+      pipeline: pipeline.value,
+      targetPath,
+      candidateSource: options.candidateSource,
+      sourceSamplePreview: options.sourceSamplePreview,
+      targetSamplePreview: options.targetSamplePreview,
+    });
+    requestPreview.value = prompt;
+
+    updateProgress(
+      "Preparing review",
+      "Review prompt ready",
+      `Built a ${prompt.length.toLocaleString()} character field review prompt for ${targetPath}.`,
+    );
+
+    if (!isModelReady.value) {
+      updateProgress(
+        "Preparing review",
+        "Ensuring model is loaded",
+        "The selected model is not ready yet, so the browser is loading it first.",
+      );
+      await loadModel();
+    }
+
+    if (!engine) {
+      return null;
+    }
+
+    isBusy.value = true;
+    updateProgress(
+      "Generating",
+      "Submitting prompt",
+      `Asking the local model whether ${options.candidateSource || "the displayed candidate"} is a reasonable match for ${targetPath}.`,
+    );
+    startElapsedTimer();
+
+    const batchResult = await runGenerationBatch({
+      prompt,
+      maxTokens: reviewMaxTokens,
+      batchIndex: 1,
+      totalBatches: 1,
+      responseSchema: likelyMatchReviewResponseSchema,
+      structuredRequest: true,
+      systemPrompt:
+        "You are PipeWeaver Studio AI. Review one displayed target-to-source candidate and return only a structured approval verdict with confidence and rationale. Do not invent alternate source paths or emit mappingFields.",
+    });
+
+    if (batchResult.wasCancelled) {
+      updateProgress(
+        "Generation cancelled",
+        "Generation cancelled",
+        `Stopped after ${formatElapsedDuration(elapsedSeconds.value)}. Partial output remains in the response editor.`,
+      );
+      return null;
+    }
+
+    updateProgress(
+      "Generating",
+      "Parsing model response",
+      "Validating the structured review response for the displayed candidate.",
+    );
+
+    const parsedReview = await parseStructuredBatchWithRetry({
+      batchIndex: 1,
+      totalBatches: 1,
+      prompt,
+      maxTokens: reviewMaxTokens,
+      responseText: batchResult.responseText,
+      responseSchema: likelyMatchReviewResponseSchema,
+      warningPrefix: "likely-match review",
+      parseResponse: parseLikelyMatchReview,
+    });
+
+    if (parsedReview.wasCancelled) {
+      updateProgress(
+        "Generation cancelled",
+        "Generation cancelled",
+        `Stopped after ${formatElapsedDuration(elapsedSeconds.value)}. Partial output remains in the response editor.`,
+      );
+      return null;
+    }
+
+    responseText.value = parsedReview.responseText;
+    if (parsedReview.warning || !parsedReview.parsed) {
+      throw new Error(parsedReview.warning || "The likely-match review was empty.");
+    }
+
+    summary.value = parsedReview.parsed.summary;
+    void playCompletionDing();
+    updateProgress(
+      parsedReview.parsed.approved ? "Review approved" : "Review rejected",
+      parsedReview.parsed.approved ? "Review approved" : "Review rejected",
+      `${parsedReview.parsed.summary} Confidence: ${parsedReview.parsed.confidence}. ${parsedReview.parsed.rationale}`.trim(),
+    );
+
+    return parsedReview.parsed;
+  } catch (error) {
+    updateProgress(
+      "Review failed",
+      "Review failed",
+      "The local model did not return a usable verdict for the displayed best local candidate.",
+    );
+    errorMessage.value =
+      error instanceof Error
+        ? `Likely-match review failed: ${error.message}`
+        : "Likely-match review failed.";
+    return null;
+  } finally {
+    stopElapsedTimer();
+    isBusy.value = false;
+    currentRunMode.value = null;
+    scopedTargetPaths.value = [];
+  }
+};
+
+const handleGenerateClick = () => {
+  void generateDraft();
 };
 
 const cancelGeneration = async () => {
@@ -1017,6 +1314,14 @@ const applyAll = () => {
   applySchema();
   applyMappings();
 };
+
+defineExpose({
+  generateForTargets,
+  reviewSuggestedMatch,
+  cancelGeneration,
+  isBusy: exposedBusy,
+  scopedTargetPaths,
+});
 </script>
 
 <template>
@@ -1045,24 +1350,26 @@ const applyAll = () => {
           }}
         </p>
       </div>
+      <div
+        v-if="scopedTargetPaths.length"
+        data-testid="ai-target-scope"
+        class="rounded-2xl border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900 shadow-sm"
+      >
+        <p class="font-semibold">Scoped target</p>
+        <p class="mt-1 break-all">
+          {{ scopedTargetLabel }}
+        </p>
+      </div>
     </div>
 
     <div class="mt-5 grid gap-4 lg:grid-cols-[1fr,1fr,0.8fr,auto]">
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Local model</span>
-        <select
+        <AppSelect
           v-model="selectedModel"
           data-testid="ai-model-select"
-          class="input"
-        >
-          <option
-            v-for="option in aiModelOptions"
-            :key="option.id"
-            :value="option.id"
-          >
-            {{ option.dropdownLabel }}
-          </option>
-        </select>
+          :options="modelSelectOptions"
+        />
         <p class="text-xs leading-5 text-slate-500">
           {{ selectedModelOption.note }}
         </p>
@@ -1081,19 +1388,11 @@ const applyAll = () => {
 
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Draft task</span>
-        <select
+        <AppSelect
           v-model="selectedMode"
-          class="input"
+          :options="modeSelectOptions"
           :disabled="Boolean(forcedMode)"
-        >
-          <option
-            v-for="(label, mode) in aiModeLabels"
-            :key="mode"
-            :value="mode"
-          >
-            {{ label }}
-          </option>
-        </select>
+        />
         <p
           v-if="forcedMode"
           class="text-xs leading-5 text-slate-500"
@@ -1142,14 +1441,29 @@ const applyAll = () => {
           class="button-primary"
           type="button"
           :disabled="isBusy"
-          @click="generateDraft"
+          @click="handleGenerateClick"
         >
           {{ generateButtonLabel }}
         </button>
       </div>
     </div>
 
+    <label class="mt-6 block space-y-2 text-sm font-medium text-slate-700">
+      <span>Data context for AI</span>
+      <textarea
+        v-model="pipeline.pipeline.aiContext"
+        data-testid="ai-data-context-input"
+        class="input min-h-28"
+        placeholder="Optional domain context for acronyms, row meaning, code systems, units, or business rules."
+      />
+      <p class="text-xs leading-5 text-slate-500">
+        Keep this focused on domain meaning. It is added to AI prompts as a
+        separate context block and does not affect deterministic matching.
+      </p>
+    </label>
+
     <div
+      v-if="!props.hideStatusPanel"
       class="mt-4 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 md:grid-cols-[auto,auto,auto,1fr]"
     >
       <div>

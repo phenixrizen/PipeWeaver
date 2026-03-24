@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import AppSelect from "./AppSelect.vue";
 import type { SchemaField } from "../types/pipeline";
 
 defineOptions({ name: "SchemaTreeNode" });
@@ -36,12 +37,8 @@ const onNameChange = (event: Event) => {
   );
 };
 
-const onTypeChange = (event: Event) => {
-  emit(
-    "update-field-type",
-    props.nodePath,
-    (event.target as HTMLSelectElement).value,
-  );
+const onTypeChange = (value: string) => {
+  emit("update-field-type", props.nodePath, value);
 };
 
 const onRequiredChange = (event: Event) => {
@@ -129,6 +126,7 @@ const isContainer = computed(
 const showsMappedSourceZone = computed(
   () => !isContainer.value || !(props.field.fields?.length ?? 0),
 );
+const fieldTypeOptions = ["string", "integer", "number", "boolean", "object", "array"];
 </script>
 
 <template>
@@ -178,14 +176,11 @@ const showsMappedSourceZone = computed(
       </label>
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Type</span>
-        <select :value="field.type" class="input" @change="onTypeChange">
-          <option value="string">string</option>
-          <option value="integer">integer</option>
-          <option value="number">number</option>
-          <option value="boolean">boolean</option>
-          <option value="object">object</option>
-          <option value="array">array</option>
-        </select>
+        <AppSelect
+          :model-value="field.type"
+          :options="fieldTypeOptions"
+          @update:modelValue="onTypeChange(String($event))"
+        />
       </label>
       <label
         class="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700"

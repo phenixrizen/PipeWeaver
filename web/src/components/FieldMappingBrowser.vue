@@ -53,14 +53,23 @@ const filteredSourceFields = computed(() => {
   );
 });
 
+const isMappedTargetRow = (row: FieldBrowserTargetRow) => row.status === "mapped";
+
+const matchesTargetFilter = (row: FieldBrowserTargetRow) => {
+  if (targetFilter.value === "mapped") {
+    return isMappedTargetRow(row);
+  }
+  if (targetFilter.value === "unmatched") {
+    return !isMappedTargetRow(row);
+  }
+  return true;
+};
+
 const filteredTargetRows = computed(() => {
   const query = normalizeSearch(targetSearch.value);
 
   return props.targetRows.filter((row) => {
-    if (targetFilter.value === "mapped" && !row.mappedSource) {
-      return false;
-    }
-    if (targetFilter.value === "unmatched" && row.mappedSource) {
+    if (!matchesTargetFilter(row)) {
       return false;
     }
 
@@ -76,8 +85,8 @@ const filteredTargetRows = computed(() => {
 
 const targetCounts = computed(() => ({
   all: props.targetRows.length,
-  mapped: props.targetRows.filter((row) => Boolean(row.mappedSource)).length,
-  unmatched: props.targetRows.filter((row) => !row.mappedSource).length,
+  mapped: props.targetRows.filter((row) => isMappedTargetRow(row)).length,
+  unmatched: props.targetRows.filter((row) => !isMappedTargetRow(row)).length,
 }));
 
 const targetRowRefs = new Map<string, HTMLElement>();
@@ -112,7 +121,7 @@ const scrollToTarget = (targetPath: string) => {
   }
 
   targetSearch.value = "";
-  targetFilter.value = targetRow.mappedSource ? "mapped" : "unmatched";
+  targetFilter.value = isMappedTargetRow(targetRow) ? "mapped" : "unmatched";
 
   const scroll = () => {
     targetRowRefs.get(targetPath)?.scrollIntoView({

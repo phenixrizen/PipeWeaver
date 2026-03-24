@@ -88,3 +88,24 @@ it("detects format from dropped content when the filename is generic", async () 
   expect(onUpdate).toHaveBeenCalledWith("<order><id>1001</id></order>");
   expect(onDetectedFormat).toHaveBeenCalledWith("xml");
 });
+
+it("shows a guided empty state instead of a blank editor when no sample output is loaded", () => {
+  const wrapper = mount(SamplePayloadEditor, {
+    props: {
+      modelValue: "",
+      title: "Sample output",
+      format: "",
+      "onUpdate:modelValue": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  expect(wrapper.get('[data-testid="sample-payload-empty-state"]').text()).toContain(
+    "No sample output loaded yet",
+  );
+  expect(wrapper.text()).toContain("Select a target format above");
+});

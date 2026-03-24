@@ -1,10 +1,12 @@
 import {
   aiModelOptions,
   buildAiRequest,
+  buildLikelyMatchReviewPrompt,
   buildAiPrompt,
   defaultAiInstruction,
   normalizeStructuredAiResponseText,
   parseAiResponse,
+  parseLikelyMatchReview,
 } from "./ai";
 import { defaultPipeline, defaultSamplePayload } from "./defaults";
 
@@ -77,6 +79,61 @@ describe("ai helpers", () => {
     expect(prompt).not.toContain("Generate a concise summary, an improved pipelineDescription, a targetSchema, and mappingFields.");
   });
 
+  it("adds a separate data context block when aiContext is present", () => {
+    const pipeline = defaultPipeline();
+    pipeline.pipeline.aiContext =
+      "Source rows are healthcare claims and one output row is one diagnosis line.";
+
+    const prompt = buildAiPrompt({
+      mode: "studio",
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      authorPrompt: defaultAiInstruction("studio", pipeline),
+    });
+
+    expect(prompt).toContain("Data context:");
+    expect(prompt).toContain("one output row is one diagnosis line");
+  });
+
+  it("omits the data context block when aiContext is blank", () => {
+    const pipeline = defaultPipeline();
+    pipeline.pipeline.aiContext = "   ";
+
+    const prompt = buildAiPrompt({
+      mode: "studio",
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      authorPrompt: defaultAiInstruction("studio", pipeline),
+    });
+
+    expect(prompt).not.toContain("Data context:");
+  });
+
+  it("builds a likely-match review prompt with explicit candidate constraints", () => {
+    const pipeline = defaultPipeline();
+    pipeline.pipeline.aiContext =
+      "Source rows are healthcare claims and claim frequency code indicates claim type.";
+
+    const prompt = buildLikelyMatchReviewPrompt({
+      pipeline,
+      targetPath: "Claim_Frequency_Code",
+      candidateSource: "Body.CodeEditClaims.Claims.Claim.ClaimCodes",
+      sourceSamplePreview: "No sample value",
+      targetSamplePreview: "1",
+    });
+
+    expect(prompt).toContain("Task: Review one likely local field match.");
+    expect(prompt).toContain(
+      "Would Claim_Frequency_Code have the best local candidate Body.CodeEditClaims.Claims.Claim.ClaimCodes?",
+    );
+    expect(prompt).toContain("Source sample: No sample value");
+    expect(prompt).toContain("Target sample: 1");
+    expect(prompt).toContain("Data context:");
+    expect(prompt).toContain("claim frequency code indicates claim type");
+    expect(prompt).toContain("Do not suggest a different field.");
+    expect(prompt).not.toContain("Current pipeline JSON:");
+  });
+
   it("uses markdown instructions for explain mode instead of the JSON contract", () => {
     const prompt = buildAiPrompt({
       mode: "explain",
@@ -99,6 +156,27 @@ describe("ai helpers", () => {
       mappingFields: [],
       pipelineDescription: "ok",
     });
+  });
+
+  it("parses valid likely-match review payloads", () => {
+    expect(
+      parseLikelyMatchReview(
+        '{"approved":true,"confidence":"high","summary":"Looks right","rationale":"The field names and sample align."}',
+      ),
+    ).toEqual({
+      approved: true,
+      confidence: "high",
+      summary: "Looks right",
+      rationale: "The field names and sample align.",
+    });
+  });
+
+  it("rejects likely-match review payloads without a valid confidence", () => {
+    expect(() =>
+      parseLikelyMatchReview(
+        '{"approved":true,"confidence":"certain","summary":"Looks right","rationale":"ok"}',
+      ),
+    ).toThrow("The AI response did not include a valid likely-match review.");
   });
 
   it("rejects payloads without a summary", () => {
@@ -132,11 +210,14 @@ describe("ai helpers", () => {
       "Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC",
       "NeuralHermes-2.5-Mistral-7B-q4f16_1-MLC",
       "Phi-3.5-mini-instruct-q4f16_1-MLC",
+      "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
     ]);
   });
 
   it("switches large requests into compact mode with unresolved target candidates", () => {
     const pipeline = defaultPipeline();
+    pipeline.pipeline.aiContext =
+      "customer_id is the primary business key and amount should remain USD.";
     pipeline.mapping.fields = [
       {
         from: "customer_id",
@@ -165,6 +246,8 @@ describe("ai helpers", () => {
     expect(request.lockedMappingTargets).toEqual(["customer.id"]);
     expect(request.prompt).toContain("Compact mode is active");
     expect(request.prompt).toContain("Unresolved target candidates:");
+    expect(request.prompt).toContain("Data context:");
+    expect(request.prompt).toContain("primary business key");
     expect(request.prompt).not.toContain("Current pipeline JSON:");
     expect(request.prompt).not.toContain(largeCsv);
   });
@@ -230,4 +313,43 @@ describe("ai helpers", () => {
       expect(request.prompt).toContain("Unresolved target candidates:");
     }
   });
+});
+
+it("scopes mapping requests down to the requested target paths", () => {
+  const pipeline = defaultPipeline();
+  pipeline.targetSchema = {
+    type: "object",
+    fields: [
+      {
+        name: "customer",
+        type: "object",
+        fields: [
+          { name: "id", type: "string" },
+          { name: "name", type: "string" },
+        ],
+      },
+    ],
+  };
+
+  const largeCsv = [
+    "customer_id,full_name,amount",
+    ...Array.from({ length: 500 }, (_, index) =>
+      `${1000 + index},Ada Lovelace ${index},${index + 0.5}`,
+    ),
+  ].join("\n");
+
+  const request = buildAiRequest({
+    mode: "mapping",
+    pipeline,
+    samplePayload: largeCsv,
+    authorPrompt: defaultAiInstruction("mapping", pipeline),
+    targetScope: ["customer.name"],
+    requestedMaxTokens: 1200,
+    contextWindowSize: 4096,
+  });
+
+  expect(request.shouldMergeMappings).toBe(true);
+  expect(request.prompt).toContain("Only emit mappingFields for the target path customer.name.");
+  expect(request.prompt).toContain("customer.name");
+  expect(request.prompt).not.toContain("customer.id [string]");
 });

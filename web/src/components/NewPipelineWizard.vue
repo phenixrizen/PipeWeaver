@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import AppSelect from "./AppSelect.vue";
+import GenerationProgressModal from "./GenerationProgressModal.vue";
 import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
 import {
@@ -14,10 +16,16 @@ import {
   inferRowDriverPathFromSamples,
   inferSchemaFromSample,
   inferSourceFields,
+  isTabularFormat,
   rankTargetMatches,
   type TargetMatchResolution,
 } from "../lib/schema";
-import type { AiDraftMode, AiDraftResponse } from "../lib/ai";
+import type {
+  AiAssistantProgress,
+  AiDraftMode,
+  AiDraftResponse,
+  AiLikelyMatchReview,
+} from "../lib/ai";
 import type { FieldMapping, PipelineDefinition } from "../types/pipeline";
 
 const pipeline = defineModel<PipelineDefinition>("pipeline", {
@@ -33,7 +41,13 @@ const emit = defineEmits<{ complete: [] }>();
 
 const connectorTypes = ["http", "file", "stdout", "postgres", "kafka"];
 const formatOptions = ["json", "csv", "tsv", "pipe", "xml"];
+const wizardDefaultModelId = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+const xmlRepeatModeOptions = [
+  { value: "preserve", label: "Preserve arrays" },
+  { value: "explode", label: "Explode rows" },
+];
 const currentStep = ref(0);
+const furthestVisitedStep = ref(0);
 const idEditedManually = ref(false);
 const detectedTargetFormat = ref("");
 const lastPreparedSignature = ref("");
@@ -43,9 +57,47 @@ const showRawAiDraft = ref(false);
 const isPreparingDraft = ref(false);
 const localMatchResolutions = ref<TargetMatchResolution[]>([]);
 const draftPreparationStep = ref("");
+const suggestedSearch = ref("");
+const suggestedMatchReviews = ref<Record<string, AiLikelyMatchReview>>({});
+
+type WizardAiAssistantHandle = {
+  generateForTargets: (targetPaths: string[]) => Promise<void>;
+  reviewSuggestedMatch?: (options: {
+    targetPath: string;
+    candidateSource: string;
+    sourceSamplePreview: string;
+    targetSamplePreview: string;
+  }) => Promise<AiLikelyMatchReview | null>;
+  cancelGeneration?: () => Promise<void>;
+  isBusy: boolean;
+};
+
+type WizardProgressModalState = {
+  title: string;
+  status: string;
+  step: string;
+  elapsedLabel: string;
+  detail: string;
+  responseText: string;
+  wordsReceived: number;
+  modelLabel: string;
+  scopeLabel: string;
+  errorMessage: string;
+  canCancel: boolean;
+};
+
+const aiAssistantRef = ref<WizardAiAssistantHandle | null>(null);
+const aiAssistantProgress = ref<AiAssistantProgress | null>(null);
+const showAiErrorModal = ref(false);
+const showProgressModal = ref(false);
+const localCrunchStatus = ref("Idle");
+const localCrunchStep = ref("Queued");
+const localCrunchDetail = ref("");
+const localCrunchElapsedSeconds = ref(0);
 
 let prepareDraftRequestId = 0;
 let activePreparePromise: Promise<void> | null = null;
+let localCrunchTimer: number | undefined;
 
 const steps = [
   {
@@ -70,12 +122,33 @@ const steps = [
   },
 ] as const;
 
+const formatElapsedDuration = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "0s";
+  }
+
+  const wholeSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const remainingSeconds = wholeSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${remainingSeconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  return `${remainingSeconds}s`;
+};
+
 const slugify = (value: string) =>
   value
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+
+const normalizeSearch = (value: string) => value.trim().toLowerCase();
 
 const ensureConfig = (side: "source" | "target") => {
   const connector = pipeline.value[side];
@@ -158,29 +231,51 @@ const suggestedResolutions = computed(() =>
   ),
 );
 
-const suggestedResolutionCards = computed(() =>
-  {
-    const sourcePreview = createSamplePreviewResolver(
-      pipeline.value.source.format,
-      samplePayload.value,
-    );
-    const targetPreview = createSamplePreviewResolver(
-      pipeline.value.target.format,
-      sampleOutput.value,
-    );
+const suggestedResolutionCards = computed(() => {
+  const sourcePreview = createSamplePreviewResolver(
+    pipeline.value.source.format,
+    samplePayload.value,
+  );
+  const targetPreview = createSamplePreviewResolver(
+    pipeline.value.target.format,
+    sampleOutput.value,
+  );
 
-    return suggestedResolutions.value.map((resolution) => {
+  return suggestedResolutions.value.map((resolution) => {
     const suggestedSource =
       resolution.suggestedSource ?? resolution.candidates[0]?.source ?? "";
 
-      return {
-        resolution,
-        suggestedSource,
-        sourceSamplePreview: sourcePreview(suggestedSource) || "No sample value",
-        targetSamplePreview: targetPreview(resolution.target) || "No sample value",
-      };
-    });
-  },
+    return {
+      resolution,
+      suggestedSource,
+      sourceSamplePreview: sourcePreview(suggestedSource) || "No sample value",
+      targetSamplePreview: targetPreview(resolution.target) || "No sample value",
+    };
+  });
+});
+
+const filteredSuggestedResolutionCards = computed(() => {
+  const query = normalizeSearch(suggestedSearch.value);
+  if (!query) {
+    return suggestedResolutionCards.value;
+  }
+
+  return suggestedResolutionCards.value.filter((card) =>
+    [
+      card.resolution.target,
+      card.suggestedSource,
+      card.sourceSamplePreview,
+      card.targetSamplePreview,
+    ]
+      .filter(Boolean)
+      .some((value) => value.toLowerCase().includes(query)),
+  );
+});
+
+const suggestedResolutionCardByTarget = computed(() =>
+  Object.fromEntries(
+    suggestedResolutionCards.value.map((card) => [card.resolution.target, card]),
+  ),
 );
 
 const unsupportedResolutions = computed(() =>
@@ -202,7 +297,87 @@ const showAiFallback = computed(
   () => !targetSampleLocksSchema.value || suggestedResolutions.value.length > 0,
 );
 
-const rowDriverPath = computed(() => pipeline.value.mapping.rowDriverPath);
+const aiAssistantBusy = computed(() => Boolean(aiAssistantRef.value?.isBusy));
+
+const rowDriverPath = computed({
+  get: () => pipeline.value.mapping.rowDriverPath,
+  set: (value: string | undefined) => {
+    pipeline.value.mapping.rowDriverPath = value?.trim() ? value : undefined;
+  },
+});
+
+const rowDriverSelection = computed({
+  get: () => rowDriverPath.value ?? "",
+  set: (value: string) => {
+    rowDriverPath.value = value || undefined;
+  },
+});
+
+const sourceFields = computed(() =>
+  inferSourceFields(pipeline.value.source.format, samplePayload.value),
+);
+
+const supportsRowDriverSelection = computed(
+  () =>
+    pipeline.value.source.format === "xml" &&
+    isTabularFormat(pipeline.value.target.format),
+);
+
+const rowDriverOptions = computed(() => {
+  if (!supportsRowDriverSelection.value) {
+    return [];
+  }
+
+  const mappedBranchCounts = new Map<string, number>();
+  pipeline.value.mapping.fields.forEach((mapping) => {
+    if (!mapping.from) {
+      return;
+    }
+
+    const branchPath = sourceFields.value.find(
+      (field) => field.path === mapping.from,
+    )?.repeatBranchPath;
+    if (!branchPath) {
+      return;
+    }
+
+    mappedBranchCounts.set(branchPath, (mappedBranchCounts.get(branchPath) ?? 0) + 1);
+  });
+
+  return Array.from(
+    new Set(
+      sourceFields.value
+        .map((field) => field.repeatBranchPath)
+        .filter((path): path is string => Boolean(path)),
+    ),
+  )
+    .map((path) => {
+      const mappedCount = mappedBranchCounts.get(path) ?? 0;
+
+      return {
+        path,
+        mappedCount,
+        label: mappedCount
+          ? `${path} (${mappedCount} mapped field${mappedCount === 1 ? "" : "s"})`
+          : `${path} (no mapped fields yet)`,
+      };
+    })
+    .sort((left, right) => {
+      if (right.mappedCount !== left.mappedCount) {
+        return right.mappedCount - left.mappedCount;
+      }
+
+      return left.path.localeCompare(right.path);
+    });
+});
+
+const rowDriverSelectOptions = computed(() => [
+  { value: "", label: "None" },
+  ...rowDriverOptions.value.map((option) => ({
+    value: option.path,
+    label: option.label,
+  })),
+]);
 
 const wizardSummaryText = computed(() => {
   if (isPreparingDraft.value) {
@@ -228,6 +403,49 @@ const wizardSummaryText = computed(() => {
     : "Without a target sample, the local copilot can still draft the target schema, first-pass mappings, and a stronger operator-facing description.";
 });
 
+const activeProgressModalState = computed<WizardProgressModalState | null>(() => {
+  if (isPreparingDraft.value) {
+    return {
+      title: "Preparing local draft",
+      status: localCrunchStatus.value,
+      step: localCrunchStep.value,
+      elapsedLabel: formatElapsedDuration(localCrunchElapsedSeconds.value),
+      detail: localCrunchDetail.value,
+      responseText: "",
+      wordsReceived: 0,
+      modelLabel: "",
+      scopeLabel: "",
+      errorMessage: "",
+      canCancel: false,
+    };
+  }
+
+  if (!showProgressModal.value && !showAiErrorModal.value) {
+    return null;
+  }
+
+  const progress = aiAssistantProgress.value;
+  if (!progress) {
+    return null;
+  }
+
+  return {
+    title: progress.scopedTargetLabel
+      ? "Resolving suggested target"
+      : "Generating from samples",
+    status: progress.status,
+    step: progress.step,
+    elapsedLabel: progress.elapsedLabel || formatElapsedDuration(progress.elapsedSeconds),
+    detail: progress.detail,
+    responseText: progress.responseText,
+    wordsReceived: progress.wordsReceived,
+    modelLabel: progress.modelLabel,
+    scopeLabel: progress.scopedTargetLabel,
+    errorMessage: showAiErrorModal.value ? progress.errorMessage : "",
+    canCancel: progress.canCancel,
+  };
+});
+
 const isStepValid = computed(() => {
   switch (currentStep.value) {
     case 0:
@@ -246,6 +464,39 @@ const isStepValid = computed(() => {
       return true;
   }
 });
+
+const canVisitStep = (index: number) => index <= furthestVisitedStep.value;
+
+const goToStep = (index: number) => {
+  if (!canVisitStep(index)) {
+    return;
+  }
+
+  currentStep.value = index;
+};
+
+watch(
+  () => suggestedResolutions.value.map((resolution) => resolution.target),
+  (targetPaths) => {
+    const activeTargets = new Set(targetPaths);
+    suggestedMatchReviews.value = Object.fromEntries(
+      Object.entries(suggestedMatchReviews.value).filter(([targetPath]) =>
+        activeTargets.has(targetPath),
+      ),
+    );
+  },
+  { immediate: true },
+);
+
+watch(
+  () => rowDriverOptions.value.map((option) => option.path),
+  (paths) => {
+    if (rowDriverPath.value && !paths.includes(rowDriverPath.value)) {
+      rowDriverPath.value = undefined;
+    }
+  },
+  { immediate: true },
+);
 
 const handleIdInput = (event: Event) => {
   idEditedManually.value = true;
@@ -277,12 +528,56 @@ const resetAiSummary = () => {
 
 const applySuggestedResolution = (resolution: TargetMatchResolution) => {
   applyResolutionMapping(pipeline.value.mapping.fields, resolution);
+  const nextReviews = { ...suggestedMatchReviews.value };
+  delete nextReviews[resolution.target];
+  suggestedMatchReviews.value = nextReviews;
 };
 
 const applyAllSuggestedResolutions = () => {
-  suggestedResolutions.value.forEach((resolution) => {
-    applySuggestedResolution(resolution);
+  filteredSuggestedResolutionCards.value.forEach((card) => {
+    applySuggestedResolution(card.resolution);
   });
+};
+
+const requestAiSuggestedResolution = async (targetPath: string) => {
+  if (!aiAssistantRef.value || aiAssistantBusy.value) {
+    return;
+  }
+
+  const card = suggestedResolutionCardByTarget.value[targetPath];
+  if (!card || !aiAssistantRef.value.reviewSuggestedMatch) {
+    return;
+  }
+
+  showProgressModal.value = true;
+  showAiErrorModal.value = false;
+  const review = await aiAssistantRef.value.reviewSuggestedMatch({
+    targetPath,
+    candidateSource: card.suggestedSource,
+    sourceSamplePreview: card.sourceSamplePreview,
+    targetSamplePreview: card.targetSamplePreview,
+  });
+  if (review) {
+    suggestedMatchReviews.value = {
+      ...suggestedMatchReviews.value,
+      [targetPath]: review,
+    };
+  }
+  if (!showAiErrorModal.value) {
+    showProgressModal.value = false;
+  }
+};
+
+const askAiSuggestedLabel = (targetPath: string) =>
+  suggestedMatchReviews.value[targetPath] ? "Re-run AI" : "Ask AI";
+
+const applySuggestedLabel = (targetPath: string) => {
+  const review = suggestedMatchReviews.value[targetPath];
+  if (!review) {
+    return "Apply";
+  }
+
+  return review.approved ? "Apply vetted match" : "Apply anyway";
 };
 
 const handleAiGenerated = (result: {
@@ -301,8 +596,91 @@ const handleAiGenerated = (result: {
   showRawAiDraft.value = false;
 };
 
+const draftPreparationDetail = (step: string) => {
+  switch (step) {
+    case "Inferring target schema":
+      return "Building the output contract from the selected target format and sample output.";
+    case "Inferring source fields":
+      return "Parsing the sample payload to discover source fields and repeated branches.";
+    case "Ranking local matches":
+      return "Scoring deterministic and structural matches before deciding whether the model is needed.";
+    case "Inferring repeat behavior":
+      return "Checking repeated XML branches and row-driver behavior from the current samples.";
+    case "Finalizing draft":
+      return "Applying the safe local draft and preparing the Generate step.";
+    default:
+      return "Opening the Generate step and queuing local analysis.";
+  }
+};
+
+const stopLocalCrunchTimer = () => {
+  if (typeof window === "undefined" || localCrunchTimer === undefined) {
+    return;
+  }
+
+  window.clearInterval(localCrunchTimer);
+  localCrunchTimer = undefined;
+};
+
+const startLocalCrunchTimer = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  stopLocalCrunchTimer();
+  localCrunchElapsedSeconds.value = 0;
+  localCrunchTimer = window.setInterval(() => {
+    localCrunchElapsedSeconds.value += 1;
+  }, 1000);
+};
+
+const resetLocalCrunchState = () => {
+  stopLocalCrunchTimer();
+  localCrunchStatus.value = "Idle";
+  localCrunchStep.value = "Queued";
+  localCrunchDetail.value = "";
+  localCrunchElapsedSeconds.value = 0;
+};
+
+const handleAiProgress = (progress: AiAssistantProgress) => {
+  aiAssistantProgress.value = progress;
+
+  if (progress.busy) {
+    showProgressModal.value = true;
+    showAiErrorModal.value = false;
+    return;
+  }
+
+  if (progress.errorMessage.trim()) {
+    showProgressModal.value = true;
+    showAiErrorModal.value = true;
+    return;
+  }
+
+  if (!isPreparingDraft.value) {
+    showProgressModal.value = false;
+    showAiErrorModal.value = false;
+  }
+};
+
+const handleProgressModalCancel = async () => {
+  if (!activeProgressModalState.value?.canCancel) {
+    return;
+  }
+
+  await aiAssistantRef.value?.cancelGeneration?.();
+};
+
+const handleProgressModalClose = () => {
+  showProgressModal.value = false;
+  showAiErrorModal.value = false;
+};
+
 const setDraftPreparationStep = (value: string) => {
   draftPreparationStep.value = value;
+  localCrunchStatus.value = "Crunching samples";
+  localCrunchStep.value = value || "Queued";
+  localCrunchDetail.value = draftPreparationDetail(value);
 };
 
 const seedTargetSchemaPreview = () => {
@@ -350,10 +728,7 @@ const prepareDraftFromSamples = async (
   if (isStale()) {
     return;
   }
-  const sourceFields = inferSourceFields(
-    pipeline.value.source.format,
-    samplePayload.value,
-  );
+  const currentSourceFields = sourceFields.value;
   const targetPaths = flattenSchemaLeafPaths(pipeline.value.targetSchema?.fields);
   const targetFieldOptions = flattenSchemaLeafOptions(
     pipeline.value.targetSchema?.fields,
@@ -365,12 +740,12 @@ const prepareDraftFromSamples = async (
   if (isStale()) {
     return;
   }
-  const nextResolutions = rankTargetMatches(sourceFields, targetFieldOptions);
+  const nextResolutions = rankTargetMatches(currentSourceFields, targetFieldOptions);
 
-  applyDeterministicMappings(nextMappings, sourceFields, targetPaths);
+  applyDeterministicMappings(nextMappings, currentSourceFields, targetPaths);
   applyHighConfidenceSuggestedMappings(
     nextMappings,
-    sourceFields,
+    currentSourceFields,
     targetFieldOptions,
   );
   localMatchResolutions.value = nextResolutions;
@@ -382,7 +757,7 @@ const prepareDraftFromSamples = async (
   }
   inferRepeatModesFromSamples({
     mappings: nextMappings,
-    sourceFields,
+    sourceFields: currentSourceFields,
     sourceFormat: pipeline.value.source.format,
     samplePayload: samplePayload.value,
     targetFormat: pipeline.value.target.format,
@@ -390,7 +765,7 @@ const prepareDraftFromSamples = async (
   });
   pipeline.value.mapping.rowDriverPath = inferRowDriverPathFromSamples({
     mappings: nextMappings,
-    sourceFields,
+    sourceFields: currentSourceFields,
     sourceFormat: pipeline.value.source.format,
     samplePayload: samplePayload.value,
     targetFormat: pipeline.value.target.format,
@@ -443,6 +818,13 @@ const scheduleDraftPreparation = (force = false) => {
   const requestId = ++prepareDraftRequestId;
   seedTargetSchemaPreview();
   isPreparingDraft.value = true;
+  showProgressModal.value = true;
+  showAiErrorModal.value = false;
+  resetLocalCrunchState();
+  localCrunchStatus.value = "Crunching samples";
+  localCrunchStep.value = "Queued";
+  localCrunchDetail.value = draftPreparationDetail("");
+  startLocalCrunchTimer();
 
   const promise = (async () => {
     await yieldToBrowser();
@@ -450,10 +832,19 @@ const scheduleDraftPreparation = (force = false) => {
       return;
     }
     await prepareDraftFromSamples(force, requestId);
+    if (requestId !== prepareDraftRequestId || currentStep.value !== 3) {
+      return;
+    }
+
+    isPreparingDraft.value = false;
+    draftPreparationStep.value = "";
+    stopLocalCrunchTimer();
+    showProgressModal.value = false;
   })().finally(() => {
     if (requestId === prepareDraftRequestId) {
       isPreparingDraft.value = false;
       draftPreparationStep.value = "";
+      stopLocalCrunchTimer();
     }
     if (activePreparePromise === promise) {
       activePreparePromise = null;
@@ -467,7 +858,11 @@ const scheduleDraftPreparation = (force = false) => {
 watch(
   () => currentStep.value,
   (step) => {
+    furthestVisitedStep.value = Math.max(furthestVisitedStep.value, step);
+
     if (step === 3) {
+      aiAssistantProgress.value = null;
+      showAiErrorModal.value = false;
       void scheduleDraftPreparation();
       return;
     }
@@ -475,6 +870,10 @@ watch(
     prepareDraftRequestId += 1;
     isPreparingDraft.value = false;
     draftPreparationStep.value = "";
+    showProgressModal.value = false;
+    showAiErrorModal.value = false;
+    aiAssistantProgress.value = null;
+    resetLocalCrunchState();
   },
 );
 
@@ -527,6 +926,24 @@ const completeWizard = async () => {
 
 <template>
   <section class="panel overflow-hidden">
+    <GenerationProgressModal
+      v-if="activeProgressModalState"
+      visible
+      :title="activeProgressModalState.title"
+      :status="activeProgressModalState.status"
+      :step="activeProgressModalState.step"
+      :elapsed-label="activeProgressModalState.elapsedLabel"
+      :detail="activeProgressModalState.detail"
+      :response-text="activeProgressModalState.responseText"
+      :words-received="activeProgressModalState.wordsReceived"
+      :model-label="activeProgressModalState.modelLabel"
+      :scope-label="activeProgressModalState.scopeLabel"
+      :error-message="activeProgressModalState.errorMessage"
+      :can-cancel="activeProgressModalState.canCancel"
+      @cancel="handleProgressModalCancel"
+      @close="handleProgressModalClose"
+    />
+
     <div
       class="bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_34%),linear-gradient(180deg,_#ffffff,_#eff6ff)] p-6"
     >
@@ -549,16 +966,20 @@ const completeWizard = async () => {
         <button
           v-for="(step, index) in steps"
           :key="step.label"
+          :data-testid="`wizard-step-button-${index}`"
           class="rounded-2xl border px-4 py-3 text-left transition"
           :class="
             index === currentStep
               ? 'border-sky-500 bg-sky-500 text-white shadow-lg shadow-sky-500/20'
+              : index > furthestVisitedStep
+                ? 'cursor-not-allowed border-slate-100 bg-slate-100/80 text-slate-400 opacity-70'
               : index < currentStep
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                : 'border-slate-200 bg-white/80 text-slate-700'
+                : 'border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 hover:bg-white'
           "
           type="button"
-          @click="currentStep = index"
+          :disabled="!canVisitStep(index)"
+          @click="goToStep(index)"
         >
           <p class="text-xs font-semibold uppercase tracking-[0.22em]">
             {{ step.label }}
@@ -608,21 +1029,19 @@ const completeWizard = async () => {
         <div class="grid gap-4 md:grid-cols-2">
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Source connector</span>
-            <select v-model="pipeline.source.type" class="input">
-              <option value="" disabled>Select a source connector</option>
-              <option v-for="option in connectorTypes" :key="option" :value="option">
-                {{ option }}
-              </option>
-            </select>
+            <AppSelect
+              v-model="pipeline.source.type"
+              :options="connectorTypes"
+              placeholder="Select a source connector"
+            />
           </label>
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Source format</span>
-            <select v-model="pipeline.source.format" class="input">
-              <option value="" disabled>Select a source format</option>
-              <option v-for="option in formatOptions" :key="option" :value="option">
-                {{ option }}
-              </option>
-            </select>
+            <AppSelect
+              v-model="pipeline.source.format"
+              :options="formatOptions"
+              placeholder="Select a source format"
+            />
           </label>
         </div>
 
@@ -632,10 +1051,7 @@ const completeWizard = async () => {
         >
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Repeated XML elements default</span>
-            <select v-model="xmlRepeatMode" class="input">
-              <option value="preserve">Preserve arrays</option>
-              <option value="explode">Explode rows</option>
-            </select>
+            <AppSelect v-model="xmlRepeatMode" :options="xmlRepeatModeOptions" />
             <p class="text-xs leading-5 text-slate-500">
               Use `Preserve arrays` when tabular outputs should keep one row per
               source record. Use `Explode rows` when repeated XML elements
@@ -655,21 +1071,19 @@ const completeWizard = async () => {
         <div class="grid gap-4 md:grid-cols-2">
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Target connector</span>
-            <select v-model="pipeline.target.type" class="input">
-              <option value="" disabled>Select a target connector</option>
-              <option v-for="option in connectorTypes" :key="option" :value="option">
-                {{ option }}
-              </option>
-            </select>
+            <AppSelect
+              v-model="pipeline.target.type"
+              :options="connectorTypes"
+              placeholder="Select a target connector"
+            />
           </label>
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Target format</span>
-            <select v-model="pipeline.target.format" class="input">
-              <option value="" disabled>Select a target format</option>
-              <option v-for="option in formatOptions" :key="option" :value="option">
-                {{ option }}
-              </option>
-            </select>
+            <AppSelect
+              v-model="pipeline.target.format"
+              :options="formatOptions"
+              placeholder="Select a target format"
+            />
           </label>
         </div>
 
@@ -768,7 +1182,25 @@ const completeWizard = async () => {
                 </div>
                 <div class="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700">
                   <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Row driver</p>
-                  <p class="mt-2 break-all font-semibold text-slate-900">
+                  <div
+                    v-if="supportsRowDriverSelection && rowDriverOptions.length"
+                    class="mt-2 space-y-2"
+                  >
+                    <AppSelect
+                      v-model="rowDriverSelection"
+                      data-testid="wizard-row-driver-select"
+                      :options="rowDriverSelectOptions"
+                    />
+                    <p class="text-xs leading-5 text-slate-500">
+                      Pick the repeated XML branch that should define one emitted
+                      row. Branches already used by the draft mappings are listed
+                      first.
+                    </p>
+                  </div>
+                  <p
+                    v-else
+                    class="mt-2 break-all font-semibold text-slate-900"
+                  >
                     {{ rowDriverPath || 'None' }}
                   </p>
                 </div>
@@ -776,6 +1208,24 @@ const completeWizard = async () => {
               <p class="mt-4 text-sm leading-6 text-slate-600">
                 {{ wizardSummaryText }}
               </p>
+            </div>
+
+            <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <label class="space-y-3 text-sm font-medium text-slate-700">
+                <span>Data context for AI</span>
+                <textarea
+                  v-model="pipeline.pipeline.aiContext"
+                  data-testid="wizard-ai-context-input"
+                  class="input min-h-28"
+                  placeholder="Optional domain context for acronyms, row meaning, code systems, units, or business rules."
+                />
+                <p class="text-xs leading-5 text-slate-500">
+                  This only helps the AI reason about the translation. Example:
+                  “Source rows are healthcare claims. One output row is one
+                  diagnosis line. NPI is provider ID and CPT codes are procedure
+                  codes.”
+                </p>
+              </label>
             </div>
 
             <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -835,27 +1285,44 @@ const completeWizard = async () => {
               v-if="suggestedResolutions.length"
               class="rounded-3xl border border-sky-200 bg-white p-5 shadow-sm"
             >
-              <div class="flex items-start justify-between gap-4">
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <p class="panel-title text-sky-700">Likely local matches</p>
                   <p class="mt-2 text-sm leading-6 text-slate-600">
                     PipeWeaver found strong structural candidates for these targets, but left them for review instead of auto-applying them.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  class="button-secondary"
-                  data-testid="wizard-apply-likely-button"
-                  @click="applyAllSuggestedResolutions"
-                >
-                  Apply likely matches
-                </button>
+                <div class="flex w-full max-w-lg flex-col gap-3 lg:items-end">
+                  <label class="w-full space-y-2 text-sm font-medium text-slate-700">
+                    <span class="sr-only">Search likely local matches</span>
+                    <input
+                      v-model="suggestedSearch"
+                      data-testid="wizard-suggested-search"
+                      class="input"
+                      placeholder="Search likely matches"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    class="button-secondary"
+                    data-testid="wizard-apply-likely-button"
+                    :disabled="!filteredSuggestedResolutionCards.length"
+                    @click="applyAllSuggestedResolutions"
+                  >
+                    Apply likely matches
+                  </button>
+                </div>
               </div>
 
-              <div class="mt-4 max-h-96 space-y-3 overflow-auto pr-1">
+              <div
+                v-if="filteredSuggestedResolutionCards.length"
+                class="mt-4 max-h-96 space-y-3 overflow-auto pr-1"
+              >
                 <div
-                  v-for="card in suggestedResolutionCards"
+                  v-for="card in filteredSuggestedResolutionCards"
                   :key="card.resolution.target"
+                  data-testid="wizard-suggested-card"
+                  :data-target-path="card.resolution.target"
                   class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
                 >
                   <div class="flex items-start justify-between gap-4">
@@ -887,18 +1354,86 @@ const completeWizard = async () => {
                           </p>
                         </div>
                       </div>
+                      <div
+                        v-if="suggestedMatchReviews[card.resolution.target]"
+                        data-testid="wizard-suggested-review"
+                        :data-target-path="card.resolution.target"
+                        :data-approved="
+                          String(suggestedMatchReviews[card.resolution.target].approved)
+                        "
+                        class="mt-3 rounded-2xl border px-3 py-3"
+                        :class="
+                          suggestedMatchReviews[card.resolution.target].approved
+                            ? 'border-emerald-200 bg-emerald-50/80 text-emerald-950'
+                            : 'border-amber-200 bg-amber-50/90 text-amber-950'
+                        "
+                      >
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span
+                            class="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]"
+                            :class="
+                              suggestedMatchReviews[card.resolution.target].approved
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            "
+                          >
+                            {{
+                              suggestedMatchReviews[card.resolution.target].approved
+                                ? "AI approved local match"
+                                : "AI flagged local match"
+                            }}
+                          </span>
+                          <span class="text-xs font-semibold uppercase tracking-[0.18em]">
+                            {{
+                              suggestedMatchReviews[
+                                card.resolution.target
+                              ].confidence
+                            }}
+                            confidence
+                          </span>
+                        </div>
+                        <p class="mt-2 text-sm font-semibold">
+                          {{ suggestedMatchReviews[card.resolution.target].summary }}
+                        </p>
+                        <p class="mt-2 text-sm leading-6">
+                          {{
+                            suggestedMatchReviews[card.resolution.target]
+                              .rationale
+                          }}
+                        </p>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      class="button-secondary whitespace-nowrap"
-                      data-testid="wizard-apply-suggested-button"
-                      @click="applySuggestedResolution(card.resolution)"
-                    >
-                      Apply
-                    </button>
+                    <div class="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        class="button-secondary whitespace-nowrap"
+                        data-testid="wizard-ask-ai-suggested-button"
+                        :data-target-path="card.resolution.target"
+                        :disabled="aiAssistantBusy"
+                        @click="requestAiSuggestedResolution(card.resolution.target)"
+                      >
+                        {{ askAiSuggestedLabel(card.resolution.target) }}
+                      </button>
+                      <button
+                        type="button"
+                        class="button-secondary whitespace-nowrap"
+                        data-testid="wizard-apply-suggested-button"
+                        :data-target-path="card.resolution.target"
+                        @click="applySuggestedResolution(card.resolution)"
+                      >
+                        {{ applySuggestedLabel(card.resolution.target) }}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
+              <p
+                v-else
+                data-testid="wizard-suggested-empty-state"
+                class="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500"
+              >
+                No likely matches match the current search.
+              </p>
             </div>
 
             <div
@@ -915,23 +1450,9 @@ const completeWizard = async () => {
             </div>
           </div>
 
-          <div
-            v-if="isPreparingDraft"
-            class="rounded-3xl border border-sky-200 bg-sky-50/80 p-6 text-sm leading-6 text-sky-950 shadow-sm"
-          >
-            <p class="panel-title text-sky-700">Preparing local draft</p>
-            <p class="mt-3">
-              PipeWeaver is analyzing the dropped source and target samples before deciding whether the AI fallback is needed.
-            </p>
-            <p class="mt-3 text-sm font-medium text-sky-900">
-              Matching status:
-              <span class="font-semibold">
-                {{ draftPreparationStep || "Queued" }}
-              </span>
-            </p>
-          </div>
           <PipelineAiAssistant
-            v-else-if="showAiFallback"
+            v-if="showAiFallback"
+            ref="aiAssistantRef"
             v-model:pipeline="pipeline"
             :sample-payload="samplePayload"
             :sample-output="sampleOutput"
@@ -939,11 +1460,14 @@ const completeWizard = async () => {
             :hide-apply-actions="true"
             :lock-target-schema="targetSampleLocksSchema"
             :forced-mode="targetSampleLocksSchema ? 'mapping' : undefined"
+            :default-model-id="wizardDefaultModelId"
             :hide-prompt-editors="true"
             :hide-summary-panel="true"
+            :hide-status-panel="true"
             :hide-response-editor="true"
             generate-label="Generate from samples"
             @generated="handleAiGenerated"
+            @progress="handleAiProgress"
           />
           <div
             v-else
@@ -990,7 +1514,7 @@ const completeWizard = async () => {
             data-testid="wizard-complete-button"
             class="button-primary"
             type="button"
-            :disabled="isPreparingDraft"
+            :disabled="isPreparingDraft || aiAssistantBusy"
             @click="completeWizard"
           >
             Open full editor

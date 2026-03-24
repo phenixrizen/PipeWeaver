@@ -148,6 +148,26 @@ export const usePipelineStore = defineStore("pipelines", {
         this.loading = false;
       }
     },
+    async deletePipeline(id: string) {
+      this.loading = true;
+      this.error = undefined;
+      try {
+        await api.deletePipeline(id);
+        this.pipelines = this.pipelines.filter(
+          (pipeline) => pipeline.pipeline.id !== id,
+        );
+
+        if (this.current.pipeline.id === id) {
+          this.createDraft();
+        }
+      } catch (error) {
+        this.error =
+          error instanceof Error ? error.message : "Failed to delete pipeline";
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
     async runPreview() {
       this.loading = true;
       this.error = undefined;

@@ -25,6 +25,13 @@ export interface AiDraftResponse {
   mappingFields?: FieldMapping[];
 }
 
+export interface AiLikelyMatchReview {
+  approved: boolean;
+  confidence: "high" | "medium" | "low";
+  summary: string;
+  rationale: string;
+}
+
 export interface AiModelOption {
   id: string;
   label: string;
@@ -54,6 +61,22 @@ export interface AiPromptBatch {
   batchIndex: number;
   totalBatches: number;
   unresolvedTargetCount: number;
+}
+
+export interface AiAssistantProgress {
+  busy: boolean;
+  status: string;
+  step: string;
+  elapsedSeconds: number;
+  elapsedLabel: string;
+  detail: string;
+  responseText: string;
+  wordsReceived: number;
+  errorMessage: string;
+  modelId: string;
+  modelLabel: string;
+  scopedTargetLabel: string;
+  canCancel: boolean;
 }
 
 export const aiModelOptions = [
@@ -95,6 +118,16 @@ export const aiModelOptions = [
     vramLabel: "~3.7 GB VRAM",
     dropdownLabel: "Phi 3.5 · Mini · ~3.7 GB VRAM",
     note: "Most efficient option when you need smaller local memory use.",
+    contextWindowSize: 4096,
+  },
+  {
+    id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+    label: "Qwen 2.5",
+    sizeLabel: "1.5B",
+    vramRequiredMB: 1629.75,
+    vramLabel: "~1.6 GB VRAM",
+    dropdownLabel: "Qwen 2.5 · 1.5B · ~1.6 GB VRAM",
+    note: "Faster low-memory option for tight mapping prompts and single-field resolution.",
     contextWindowSize: 4096,
   },
 ] as const satisfies readonly AiModelOption[];
@@ -209,6 +242,21 @@ export const structuredAiResponseSchema = JSON.stringify({
   additionalProperties: false,
 });
 
+export const likelyMatchReviewResponseSchema = JSON.stringify({
+  type: "object",
+  properties: {
+    approved: { type: "boolean" },
+    confidence: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+    summary: { type: "string" },
+    rationale: { type: "string" },
+  },
+  required: ["approved", "confidence", "summary", "rationale"],
+  additionalProperties: false,
+});
+
 const structuredResponseRules = `Return valid JSON with this shape:
 {
   "summary": string,
@@ -228,6 +276,46 @@ Use short sections with practical headings such as:
 - Risks or gaps
 - Review next
 Do not include markdown fences.`;
+
+const likelyMatchReviewRules = `Return valid JSON with this shape:
+{
+  "approved": boolean,
+  "confidence": "high" | "medium" | "low",
+  "summary": string,
+  "rationale": string
+}
+Set summary to "YES" or "NO".
+Keep rationale to one short sentence.
+Judge only the displayed best local candidate.
+Do not propose any alternate source path.
+Do not emit mappingFields.
+Return exactly one JSON object.`;
+
+const normalizeTargetScope = (targetScope: string[] | undefined) =>
+  Array.from(
+    new Set(
+      (targetScope ?? [])
+        .map((targetPath) => targetPath.trim())
+        .filter((targetPath) => targetPath.length > 0),
+    ),
+  );
+
+const describeTargetScope = (targetScope: string[] | undefined) => {
+  const normalizedTargetScope = normalizeTargetScope(targetScope);
+  if (!normalizedTargetScope.length) {
+    return "";
+  }
+
+  const targets =
+    normalizedTargetScope.length === 1
+      ? `the target path ${normalizedTargetScope[0]}`
+      : `these target paths:\n${normalizedTargetScope
+          .map((targetPath) => `- ${targetPath}`)
+          .join("\n")}`;
+
+  return `Only emit mappingFields for ${targets}.
+Do not emit mappingFields for any other target paths.`;
+};
 
 const describeTargetShape = (pipeline: PipelineDefinition) => {
   const targetFormat = pipeline.target.format;
@@ -297,9 +385,11 @@ const buildModeInstruction = (
   mode: AiDraftMode,
   pipeline: PipelineDefinition,
   sampleOutput?: string,
+  targetScope?: string[],
 ): string => {
   const targetShape = describeTargetShape(pipeline);
   const schemaLockedBySampleOutput = Boolean(sampleOutput?.trim());
+  const targetScopeInstruction = describeTargetScope(targetScope);
 
   switch (mode) {
     case "studio":
@@ -307,10 +397,12 @@ const buildModeInstruction = (
         ? `Generate a concise summary, an improved pipelineDescription, and mappingFields.
 ${targetShape}
 The current pipeline.targetSchema was inferred from a target sample output and is authoritative.
-Do not invent or replace the targetSchema unless it is missing.`
+Do not invent or replace the targetSchema unless it is missing.
+${targetScopeInstruction}`.trim()
         : `Generate a concise summary, an improved pipelineDescription, a targetSchema, and mappingFields.
 ${targetShape}
-Prefer explicit required flags when obvious and simple transforms such as trim, normalize_whitespace, to_float, to_int, default, prefix, suffix, replace, substring, and coalesce.`;
+Prefer explicit required flags when obvious and simple transforms such as trim, normalize_whitespace, to_float, to_int, default, prefix, suffix, replace, substring, and coalesce.
+${targetScopeInstruction}`.trim();
     case "schema":
       return schemaLockedBySampleOutput
         ? `Generate a concise summary only.
@@ -322,7 +414,8 @@ Do not include mappingFields unless they are essential to explain the schema.`;
     case "mapping":
       return `Generate a concise summary and mappingFields only.
 ${targetShape}
-Prefer direct source field paths when available and only use CEL expressions when needed.`;
+Prefer direct source field paths when available and only use CEL expressions when needed.
+${targetScopeInstruction}`.trim();
     case "description":
       return "Generate a concise summary and an improved pipelineDescription only.";
     case "explain":
@@ -337,24 +430,69 @@ export const buildAiPrompt = (options: {
   samplePayload: string;
   sampleOutput?: string;
   authorPrompt: string;
+  targetScope?: string[];
 }) => {
-  const { mode, pipeline, samplePayload, sampleOutput, authorPrompt } = options;
+  const {
+    mode,
+    pipeline,
+    samplePayload,
+    sampleOutput,
+    authorPrompt,
+    targetScope,
+  } = options;
+  const normalizedTargetScope = normalizeTargetScope(targetScope);
+  const aiContext = normalizeAiContext(pipeline);
 
   return [
     `Task: ${aiModeLabels[mode]}`,
-    buildModeInstruction(mode, pipeline, sampleOutput),
+    buildModeInstruction(mode, pipeline, sampleOutput, normalizedTargetScope),
     describeSourceShape(pipeline, samplePayload),
     isStructuredAiMode(mode) ? structuredResponseRules : explainResponseRules,
+    ...(normalizedTargetScope.length
+      ? [
+          "Scoped target paths:",
+          normalizedTargetScope.map((targetPath) => `- ${targetPath}`).join("\n"),
+        ]
+      : []),
     "Current pipeline JSON:",
-    JSON.stringify(pipeline, null, 2),
+    JSON.stringify(summarizePipelineForPrompt(pipeline), null, 2),
     "Sample payload:",
     samplePayload,
     ...(sampleOutput?.trim()
       ? ["Target sample output:", sampleOutput]
       : []),
+    ...(aiContext ? ["Data context:", aiContext] : []),
     "Operator instructions:",
     authorPrompt ||
       "Use the sample payload to infer realistic output fields and keep the result production-friendly.",
+  ].join("\n\n");
+};
+
+export const buildLikelyMatchReviewPrompt = (options: {
+  pipeline: PipelineDefinition;
+  targetPath: string;
+  candidateSource: string;
+  sourceSamplePreview: string;
+  targetSamplePreview: string;
+}) => {
+  const {
+    pipeline,
+    targetPath,
+    candidateSource,
+    sourceSamplePreview,
+    targetSamplePreview,
+  } = options;
+  const aiContext = normalizeAiContext(pipeline);
+  const conciseContext = aiContext ? truncateText(aiContext, 180) : "";
+
+  return [
+    "Task: Review one likely local field match.",
+    likelyMatchReviewRules,
+    ...(conciseContext ? [`Data context: ${conciseContext}`] : []),
+    `Would ${targetPath} have the best local candidate ${candidateSource || "No candidate"}?`,
+    `Source sample: ${sourceSamplePreview || "No sample value"}`,
+    `Target sample: ${targetSamplePreview || "No sample value"}`,
+    "Only judge this candidate. Do not suggest a different field.",
   ].join("\n\n");
 };
 
@@ -473,6 +611,18 @@ const summarizeConfigForPrompt = (config: Record<string, unknown>) =>
       ]),
   );
 
+const normalizeAiContext = (pipeline: PipelineDefinition) =>
+  pipeline.pipeline.aiContext?.trim() ?? "";
+
+const summarizePipelineForPrompt = (pipeline: PipelineDefinition) => ({
+  ...pipeline,
+  pipeline: {
+    id: pipeline.pipeline.id,
+    name: pipeline.pipeline.name,
+    description: pipeline.pipeline.description,
+  },
+});
+
 const summarizeSampleForPrompt = (format: string, sample: string) => {
   const trimmed = sample.trim();
   if (!trimmed) {
@@ -506,6 +656,7 @@ const formatAppliedMappings = (
 const collectUnresolvedTargetCandidates = (
   pipeline: PipelineDefinition,
   samplePayload: string,
+  targetScope?: string[],
 ) => {
   const sourceFields = inferSourceFields(pipeline.source.format, samplePayload);
   const targetFields = flattenSchemaLeafOptions(pipeline.targetSchema?.fields);
@@ -514,9 +665,11 @@ const collectUnresolvedTargetCandidates = (
       .map((mapping) => mapping.to)
       .filter((target): target is string => Boolean(target)),
   );
+  const scopedTargets = new Set(normalizeTargetScope(targetScope));
 
   return rankTargetMatches(sourceFields, targetFields).filter(
     (resolution) =>
+      (scopedTargets.size === 0 || scopedTargets.has(resolution.target)) &&
       !lockedTargets.has(resolution.target) &&
       resolution.bucket === "suggested" &&
       resolution.candidates.length > 0,
@@ -553,6 +706,7 @@ const buildCompactAiPrompt = (options: {
   samplePayload: string;
   sampleOutput?: string;
   authorPrompt: string;
+  targetScope?: string[];
   unresolvedTargetCandidates?: TargetMatchResolution[];
   batchIndex?: number;
   totalBatches?: number;
@@ -563,10 +717,13 @@ const buildCompactAiPrompt = (options: {
     samplePayload,
     sampleOutput,
     authorPrompt,
+    targetScope,
     unresolvedTargetCandidates = [],
     batchIndex = 1,
     totalBatches = 1,
   } = options;
+  const normalizedTargetScope = normalizeTargetScope(targetScope);
+  const aiContext = normalizeAiContext(pipeline);
   const hasLockedMappings = pipeline.mapping.fields.length > 0;
   const mappingFocusedMode = mode === "studio" || mode === "mapping";
   const sourcePathPrefix = sharedPathPrefix(
@@ -582,6 +739,7 @@ const buildCompactAiPrompt = (options: {
       ? [
           "Compact mode is active because the raw samples were too large for local model context.",
           batchLabel,
+          describeTargetScope(normalizedTargetScope),
           hasLockedMappings
             ? "Treat the existing mappings as locked. Only emit mappingFields for unresolved targets listed below."
             : "Use the candidate source suggestions for unresolved targets when emitting mappingFields.",
@@ -591,14 +749,14 @@ const buildCompactAiPrompt = (options: {
 
   return [
     `Task: ${aiModeLabels[mode]}`,
-    buildModeInstruction(mode, pipeline, sampleOutput),
+    buildModeInstruction(mode, pipeline, sampleOutput, normalizedTargetScope),
     compactInstructions,
     describeCompactSourceShape(pipeline, samplePayload),
     isStructuredAiMode(mode) ? structuredResponseRules : explainResponseRules,
     "Pipeline summary:",
     JSON.stringify(
       {
-        pipeline: pipeline.pipeline,
+        pipeline: summarizePipelineForPrompt(pipeline).pipeline,
         source: {
           type: pipeline.source.type,
           format: pipeline.source.format,
@@ -635,6 +793,12 @@ const buildCompactAiPrompt = (options: {
           summarizeSampleForPrompt(pipeline.target.format, sampleOutput),
         ]
       : []),
+    ...(aiContext
+      ? [
+          "Data context:",
+          truncateText(aiContext, 600),
+        ]
+      : []),
     "Operator instructions:",
     truncateText(
       authorPrompt ||
@@ -652,6 +816,7 @@ const buildCompactAiBatches = (options: {
   samplePayload: string;
   sampleOutput?: string;
   authorPrompt: string;
+  targetScope?: string[];
   requestedMaxTokens: number;
   contextWindowSize: number;
 }) => {
@@ -661,12 +826,13 @@ const buildCompactAiBatches = (options: {
     samplePayload,
     sampleOutput,
     authorPrompt,
+    targetScope,
     requestedMaxTokens,
     contextWindowSize,
   } = options;
   const mappingFocusedMode = mode === "studio" || mode === "mapping";
   const unresolvedTargetCandidates = mappingFocusedMode
-    ? collectUnresolvedTargetCandidates(pipeline, samplePayload)
+    ? collectUnresolvedTargetCandidates(pipeline, samplePayload, targetScope)
     : [];
 
   if (!mappingFocusedMode || unresolvedTargetCandidates.length === 0) {
@@ -676,6 +842,7 @@ const buildCompactAiBatches = (options: {
       samplePayload,
       sampleOutput,
       authorPrompt,
+      targetScope,
     });
     const estimatedPromptTokens = estimatePromptTokens(prompt);
 
@@ -716,6 +883,7 @@ const buildCompactAiBatches = (options: {
         samplePayload,
         sampleOutput,
         authorPrompt,
+        targetScope,
         unresolvedTargetCandidates: slice,
         batchIndex: 88,
         totalBatches: 88,
@@ -750,6 +918,7 @@ const buildCompactAiBatches = (options: {
       samplePayload,
       sampleOutput,
       authorPrompt,
+        targetScope,
       unresolvedTargetCandidates: slice,
       batchIndex: batchOffset + 1,
       totalBatches,
@@ -782,6 +951,7 @@ export const buildAiRequest = (options: {
   samplePayload: string;
   sampleOutput?: string;
   authorPrompt: string;
+  targetScope?: string[];
   requestedMaxTokens: number;
   contextWindowSize: number;
 }): AiPromptBuildResult => {
@@ -791,9 +961,13 @@ export const buildAiRequest = (options: {
     samplePayload,
     sampleOutput,
     authorPrompt,
+    targetScope,
     requestedMaxTokens,
     contextWindowSize,
   } = options;
+  const normalizedTargetScope = normalizeTargetScope(targetScope);
+  const scopedMappingRequest =
+    normalizedTargetScope.length > 0 && ["studio", "mapping"].includes(mode);
 
   const fullPrompt = buildAiPrompt({
     mode,
@@ -801,6 +975,7 @@ export const buildAiRequest = (options: {
     samplePayload,
     sampleOutput,
     authorPrompt,
+    targetScope: normalizedTargetScope,
   });
   const estimatedFullTokens = estimatePromptTokens(fullPrompt);
   const fullCanFit = canFitPrompt(estimatedFullTokens, contextWindowSize);
@@ -822,8 +997,10 @@ export const buildAiRequest = (options: {
       estimatedPromptTokens: estimatedFullTokens,
       effectiveMaxTokens,
       statusNote: "Using the full local prompt.",
-      shouldMergeMappings: false,
-      lockedMappingTargets: [],
+      shouldMergeMappings: scopedMappingRequest,
+      lockedMappingTargets: scopedMappingRequest
+        ? pipeline.mapping.fields.map((mapping) => mapping.to)
+        : [],
       batches: [
         {
           prompt: fullPrompt,
@@ -843,6 +1020,7 @@ export const buildAiRequest = (options: {
     samplePayload,
     sampleOutput,
     authorPrompt,
+    targetScope: normalizedTargetScope,
     requestedMaxTokens,
     contextWindowSize,
   });
@@ -975,6 +1153,25 @@ export const parseAiResponse = (raw: string): AiDraftResponse => {
 
   if (!parsed || typeof parsed.summary !== "string") {
     throw new Error("The AI response did not include a valid summary.");
+  }
+
+  return parsed;
+};
+
+export const parseLikelyMatchReview = (raw: string): AiLikelyMatchReview => {
+  const normalized = raw.trim();
+  const parsed = JSON.parse(
+    extractFirstJsonObject(normalized),
+  ) as AiLikelyMatchReview;
+
+  if (
+    !parsed ||
+    typeof parsed.approved !== "boolean" ||
+    !["high", "medium", "low"].includes(parsed.confidence) ||
+    typeof parsed.summary !== "string" ||
+    typeof parsed.rationale !== "string"
+  ) {
+    throw new Error("The AI response did not include a valid likely-match review.");
   }
 
   return parsed;

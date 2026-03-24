@@ -287,3 +287,55 @@ it("lets the user set a repeated XML branch as the active row driver", async () 
     (wrapper.vm as unknown as { rowDriverPath?: string }).rowDriverPath,
   ).toBe("Body.Claim.Referral.Services.Service");
 });
+
+it("moves expression-mapped targets from unmatched search results to mapped results immediately", async () => {
+  const Harness = defineComponent({
+    components: { MappingTable },
+    setup() {
+      const rows = ref<
+        { from?: string; expression?: string; to: string; transforms: { type: string }[] }[]
+      >([]);
+      const schema = {
+        type: "object",
+        fields: [{ name: "claim_type", type: "string" }],
+      };
+
+      return { rows, schema };
+    },
+    template: `
+      <MappingTable
+        v-model="rows"
+        source-format="json"
+        sample-payload='{"claim":{"type":"professional"}}'
+        :target-schema="schema"
+      />
+    `,
+  });
+
+  const wrapper = mount(Harness);
+
+  await wrapper
+    .get('[data-testid="field-browser-target-search"]')
+    .setValue("claim_type");
+  await wrapper
+    .get('[data-testid="field-browser-target-row"][data-target-path="claim_type"]')
+    .trigger("click");
+  await wrapper
+    .get(
+      'input[placeholder*="optional CEL expression"], input[placeholder*="record.first_name"]',
+    )
+    .setValue("record.claim.type");
+  await wrapper.vm.$nextTick();
+
+  expect(wrapper.get('[data-testid="field-browser-filter-unmatched"]').text()).toContain(
+    "0",
+  );
+  expect(wrapper.findAll('[data-testid="field-browser-target-row"]')).toHaveLength(0);
+
+  await wrapper.get('[data-testid="field-browser-filter-mapped"]').trigger("click");
+
+  expect(wrapper.get('[data-testid="field-browser-filter-mapped"]').text()).toContain(
+    "1",
+  );
+  expect(wrapper.findAll('[data-testid="field-browser-target-row"]')).toHaveLength(1);
+});

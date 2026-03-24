@@ -5,6 +5,7 @@ export const blankPipeline = (): PipelineDefinition => ({
     id: "",
     name: "",
     description: "",
+    aiContext: "",
   },
   source: {
     type: "",
@@ -31,6 +32,7 @@ export const defaultPipeline = (): PipelineDefinition => ({
     id: "draft-pipeline",
     name: "Draft pipeline",
     description: "A backend-first mapping workflow built with PipeWeaver.",
+    aiContext: "Source rows are customer invoices. customer_id is the business key and amount should stay in USD.",
   },
   source: {
     type: "http",

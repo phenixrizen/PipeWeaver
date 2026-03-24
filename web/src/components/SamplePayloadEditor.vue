@@ -25,6 +25,27 @@ const isDragActive = ref(false);
 const dropError = ref("");
 const detectedFormat = ref("");
 
+const isOutputEditor = computed(() =>
+  props.title.toLowerCase().includes("output"),
+);
+
+const emptyStateTitle = computed(() =>
+  isOutputEditor.value ? "No sample output loaded yet" : "No sample payload loaded yet",
+);
+
+const emptyStateDescription = computed(() => {
+  if (!props.format) {
+    return isOutputEditor.value
+      ? "Select a target format above, then paste a representative output sample or drop a file here to lock the expected response contract."
+      : "Select a source format above, then paste a representative payload or drop a file here so PipeWeaver can parse the incoming shape correctly.";
+  }
+
+  const formatLabel = props.format.toUpperCase();
+  return isOutputEditor.value
+    ? `Paste representative ${formatLabel} output here or drop a file to ground the target schema before you generate mappings.`
+    : `Paste representative ${formatLabel} input here or drop a file to exercise parsing, mapping, and preview behavior.`;
+});
+
 const language = computed(() => {
   switch (props.format) {
     case "json":
@@ -177,6 +198,18 @@ const handleDrop = async (event: DragEvent) => {
       class="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
     >
       {{ dropError }}
+    </div>
+    <div
+      v-else-if="!model.trim()"
+      data-testid="sample-payload-empty-state"
+      class="mb-4 rounded-2xl border border-dashed border-sky-200 bg-sky-50/70 px-4 py-4 text-sm text-sky-950"
+    >
+      <p class="font-semibold text-sky-900">
+        {{ emptyStateTitle }}
+      </p>
+      <p class="mt-1 leading-6 text-sky-900">
+        {{ emptyStateDescription }}
+      </p>
     </div>
     <MonacoCodeEditor v-model="model" :language="language" height="260px" />
   </section>

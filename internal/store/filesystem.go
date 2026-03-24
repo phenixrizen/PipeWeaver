@@ -107,6 +107,36 @@ func (s *FilesystemStore) Get(id string) (pipeline.Definition, error) {
 	return pipeline.LoadFile(filepath.Join(s.Root, id+".yaml"))
 }
 
+// Delete removes a stored pipeline definition by ID.
+func (s *FilesystemStore) Delete(id string) error {
+	entries, err := os.ReadDir(s.Root)
+	if err != nil {
+		return fmt.Errorf("read store root: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !isPipelineDefinitionFile(entry.Name()) {
+			continue
+		}
+
+		entryID := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if entryID != id {
+			continue
+		}
+
+		if err := os.Remove(filepath.Join(s.Root, entry.Name())); err != nil {
+			return fmt.Errorf("delete pipeline %q: %w", id, err)
+		}
+		return nil
+	}
+
+	return &fs.PathError{
+		Op:   "delete",
+		Path: filepath.Join(s.Root, id+".yaml"),
+		Err:  fs.ErrNotExist,
+	}
+}
+
 func isPipelineDefinitionFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".yaml" || ext == ".yml" || ext == ".json"

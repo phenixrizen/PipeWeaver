@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import AppSelect from "./AppSelect.vue";
 import FieldMappingBrowser from "./FieldMappingBrowser.vue";
 import TransformEditor from "./TransformEditor.vue";
 import { validateExpression } from "../lib/cel";
@@ -32,6 +33,11 @@ const browserRef = ref<{ scrollToTarget: (targetPath: string) => void } | null>(
   null,
 );
 const detailCardRefs = new Map<string, HTMLElement>();
+const repeatModeOptions = computed(() => [
+  { value: "", label: "inherit" },
+  { value: "preserve", label: "preserve" },
+  ...(props.sourceFormat !== "xml" ? [{ value: "explode", label: "explode" }] : []),
+]);
 
 const addRow = () => {
   model.value.push({
@@ -81,14 +87,18 @@ const resolutionLookup = computed<Record<string, (typeof targetResolutions.value
 const targetRows = computed<FieldBrowserTargetRow[]>(() =>
   targetFieldOptions.value.map((target) => {
     const resolution = resolutionLookup.value[target.path];
-    const mappedSource = model.value.find((row) => row.to === target.path)?.from;
+    const mappedRow = model.value.find((row) => row.to === target.path);
+    const mappedSource =
+      mappedRow?.from?.trim() ||
+      (mappedRow?.expression?.trim() ? "CEL expression" : undefined);
+    const isMapped = Boolean(mappedSource);
 
     return {
       path: target.path,
       type: target.type,
       mappedSource,
-      suggestedSource: mappedSource ? undefined : resolution?.suggestedSource,
-      status: mappedSource
+      suggestedSource: isMapped ? undefined : resolution?.suggestedSource,
+      status: isMapped
         ? "mapped"
         : resolution?.suggestedSource
           ? "suggested"
@@ -386,11 +396,7 @@ watch(
         <div class="mt-3 grid gap-3 md:grid-cols-[1fr,1fr]">
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Repeat mode</span>
-            <select v-model="row.repeatMode" class="input">
-              <option value="">inherit</option>
-              <option value="preserve">preserve</option>
-              <option v-if="props.sourceFormat !== 'xml'" value="explode">explode</option>
-            </select>
+            <AppSelect v-model="row.repeatMode" :options="repeatModeOptions" />
           </label>
           <label class="space-y-2 text-sm font-medium text-slate-700">
             <span>Join delimiter</span>

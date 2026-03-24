@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import AppSelect from "./AppSelect.vue";
 import type { ConnectorConfig } from "../types/pipeline";
 
 const model = defineModel<ConnectorConfig>({ required: true });
@@ -64,23 +65,11 @@ const omitNullValuesEnabled = computed(
     <div class="grid gap-4 md:grid-cols-2">
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Connector type</span>
-        <select v-model="model.type" class="input">
-          <option
-            v-for="option in connectorTypes"
-            :key="option"
-            :value="option"
-          >
-            {{ option }}
-          </option>
-        </select>
+        <AppSelect v-model="model.type" :options="connectorTypes" />
       </label>
       <label class="space-y-2 text-sm font-medium text-slate-700">
         <span>Format</span>
-        <select v-model="model.format" class="input">
-          <option v-for="option in formatOptions" :key="option" :value="option">
-            {{ option }}
-          </option>
-        </select>
+        <AppSelect v-model="model.format" :options="formatOptions" />
       </label>
     </div>
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import AppSelect from "./AppSelect.vue";
 import FieldMappingBrowser from "./FieldMappingBrowser.vue";
 import SchemaTreeNode from "./SchemaTreeNode.vue";
 import {
@@ -633,13 +634,15 @@ const onTabularNameChange = (index: number, event: Event) => {
   renameField([index], (event.target as HTMLInputElement).value);
 };
 
-const onTabularTypeChange = (index: number, event: Event) => {
-  updateFieldType([index], (event.target as HTMLSelectElement).value);
+const onTabularTypeChange = (index: number, value: string) => {
+  updateFieldType([index], value);
 };
 
 const onTabularRequiredChange = (index: number, event: Event) => {
   toggleRequired([index], (event.target as HTMLInputElement).checked);
 };
+
+const tabularTypeOptions = ["string", "integer", "number", "boolean"];
 
 const xmlItemName = computed({
   get: () => schemaModel.value?.name ?? "record",
@@ -750,16 +753,11 @@ const xmlItemName = computed({
                 </label>
                 <label class="space-y-2 text-sm font-medium text-slate-700">
                   <span>Type</span>
-                  <select
-                    :value="field.type"
-                    class="input"
-                    @change="onTabularTypeChange(index, $event)"
-                  >
-                    <option value="string">string</option>
-                    <option value="integer">integer</option>
-                    <option value="number">number</option>
-                    <option value="boolean">boolean</option>
-                  </select>
+                  <AppSelect
+                    :model-value="field.type"
+                    :options="tabularTypeOptions"
+                    @update:modelValue="onTabularTypeChange(index, String($event))"
+                  />
                 </label>
                 <label
                   class="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingState from "../components/LoadingState.vue";
@@ -9,6 +9,17 @@ import { usePipelineStore } from "../stores/pipelines";
 
 const store = usePipelineStore();
 const pipelineCount = computed(() => store.pipelines.length);
+const deletingPipelineId = ref<string | null>(null);
+
+const handleDeletePipeline = async (id: string) => {
+  deletingPipelineId.value = id;
+
+  try {
+    await store.deletePipeline(id);
+  } finally {
+    deletingPipelineId.value = null;
+  }
+};
 
 onMounted(() => {
   void store.loadPipelines();
@@ -58,6 +69,13 @@ onMounted(() => {
       </section>
     </div>
 
+    <div
+      v-if="store.error"
+      class="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+    >
+      {{ store.error }}
+    </div>
+
     <LoadingState v-if="store.loading && !store.pipelines.length" />
     <EmptyState
       v-else-if="!store.pipelines.length"
@@ -68,6 +86,11 @@ onMounted(() => {
         Create your first pipeline
       </RouterLink>
     </EmptyState>
-    <PipelineList v-else :pipelines="store.pipelines" />
+    <PipelineList
+      v-else
+      :pipelines="store.pipelines"
+      :deleting-id="deletingPipelineId"
+      @delete="handleDeletePipeline"
+    />
   </div>
 </template>

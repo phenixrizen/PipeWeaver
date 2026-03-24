@@ -17,6 +17,7 @@ type Metadata struct {
 	ID          string `json:"id" yaml:"id"`
 	Name        string `json:"name" yaml:"name"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	AIContext   string `json:"aiContext,omitempty" yaml:"aiContext,omitempty"`
 }
 
 // ConnectorConfig describes a source or target connector instance.

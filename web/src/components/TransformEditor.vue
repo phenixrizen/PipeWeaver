@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import AppSelect from "./AppSelect.vue";
 import type { Transform } from "../types/pipeline";
 
 type TransformMode =
@@ -89,6 +90,10 @@ const transformOptions: TransformOption[] = [
 const transformMetadata = computed(() =>
   Object.fromEntries(transformOptions.map((option) => [option.type, option])),
 );
+const transformTypeOptions = transformOptions.map((option) => ({
+  value: option.type,
+  label: option.label,
+}));
 
 const addTransform = () => {
   model.value.push({ type: "trim" });
@@ -162,8 +167,8 @@ const removeCoalescePath = (transform: Transform, index: number) => {
   }
 };
 
-const onTypeChange = (transform: Transform, event: Event) => {
-  setType(transform, (event.target as HTMLSelectElement).value);
+const onTypeChange = (transform: Transform, nextType: string) => {
+  setType(transform, nextType);
 };
 
 const onValueInput = (transform: Transform, event: Event) => {
@@ -193,19 +198,11 @@ const onElseInput = (transform: Transform, event: Event) => {
       <div class="grid gap-3 lg:grid-cols-[1fr,auto]">
         <label class="space-y-2 text-sm font-medium text-slate-700">
           <span>Transform</span>
-          <select
-            :value="transform.type"
-            class="input"
-            @change="onTypeChange(transform, $event)"
-          >
-            <option
-              v-for="option in transformOptions"
-              :key="option.type"
-              :value="option.type"
-            >
-              {{ option.label }}
-            </option>
-          </select>
+          <AppSelect
+            :model-value="transform.type"
+            :options="transformTypeOptions"
+            @update:modelValue="onTypeChange(transform, String($event))"
+          />
         </label>
 
         <div class="flex items-end justify-end">

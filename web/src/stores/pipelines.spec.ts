@@ -4,11 +4,13 @@ import { blankPipeline } from "../lib/defaults";
 import { usePipelineStore } from "./pipelines";
 
 const {
+  deletePipelineSpy,
   getPipelineSpy,
   listPipelinesSpy,
   previewSpy,
   savePipelineSpy,
 } = vi.hoisted(() => ({
+  deletePipelineSpy: vi.fn(),
   getPipelineSpy: vi.fn(),
   listPipelinesSpy: vi.fn(),
   previewSpy: vi.fn(),
@@ -17,6 +19,7 @@ const {
 
 vi.mock("../lib/api", () => ({
   api: {
+    deletePipeline: deletePipelineSpy,
     getPipeline: getPipelineSpy,
     listPipelines: listPipelinesSpy,
     preview: previewSpy,
@@ -26,6 +29,7 @@ vi.mock("../lib/api", () => ({
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  deletePipelineSpy.mockReset();
   getPipelineSpy.mockReset();
   listPipelinesSpy.mockReset();
   previewSpy.mockReset();
@@ -108,4 +112,21 @@ it("tracks whether the current pipeline has a stable saved snapshot", async () =
   store.createDraft();
 
   expect(store.isCurrentSaved).toBe(false);
+});
+
+it("removes deleted pipelines from the catalog state", async () => {
+  const store = usePipelineStore();
+  store.pipelines = [blankPipeline(), blankPipeline()];
+  store.pipelines[0].pipeline.id = "alpha";
+  store.pipelines[0].pipeline.name = "Alpha";
+  store.pipelines[1].pipeline.id = "beta";
+  store.pipelines[1].pipeline.name = "Beta";
+  store.current = blankPipeline();
+  store.current.pipeline.id = "alpha";
+
+  await store.deletePipeline("alpha");
+
+  expect(deletePipelineSpy).toHaveBeenCalledWith("alpha");
+  expect(store.pipelines.map((pipeline) => pipeline.pipeline.id)).toEqual(["beta"]);
+  expect(store.current.pipeline.id).toBe("");
 });

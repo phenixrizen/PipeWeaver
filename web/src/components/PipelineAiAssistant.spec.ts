@@ -2,7 +2,7 @@ import { defineComponent } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import PipelineAiAssistant from "./PipelineAiAssistant.vue";
-import { structuredAiResponseSchema } from "../lib/ai";
+import { likelyMatchReviewResponseSchema, structuredAiResponseSchema } from "../lib/ai";
 import { defaultPipeline, defaultSamplePayload } from "../lib/defaults";
 
 const {
@@ -191,6 +191,60 @@ it("shows model size metadata and browser cache status", async () => {
   );
 });
 
+it("honors a wizard-specific fast model default and can hide the inline status panel", async () => {
+  const pipeline = defaultPipeline();
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      defaultModelId: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+      hideStatusPanel: true,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await flushPromises();
+
+  expect(
+    (wrapper.get('[data-testid="ai-model-select"]').element as HTMLSelectElement)
+      .value,
+  ).toBe("Qwen2.5-1.5B-Instruct-q4f16_1-MLC");
+  expect(wrapper.text()).toContain("Qwen 2.5 · 1.5B · ~1.6 GB VRAM");
+  expect(wrapper.text()).not.toContain("No model activity yet.");
+  expect(wrapper.find('[data-testid="ai-data-context-input"]').exists()).toBe(true);
+});
+
+it("binds the persisted aiContext field in the assistant panel", async () => {
+  const pipeline = defaultPipeline();
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await wrapper
+    .get('[data-testid="ai-data-context-input"]')
+    .setValue("NPI is provider ID and one output row is one diagnosis line.");
+
+  expect(pipeline.pipeline.aiContext).toBe(
+    "NPI is provider ID and one output row is one diagnosis line.",
+  );
+});
+
 it("passes the configured max_tokens value into local generation", async () => {
   const pipeline = defaultPipeline();
 
@@ -257,6 +311,50 @@ it("assembles streamed chunks into the AI response editor", async () => {
   );
   expect(wrapper.text()).toContain("Ready");
   expect(audioContextCreateOscillatorSpy).toHaveBeenCalledTimes(2);
+});
+
+it("emits streamed progress updates with response text and approximate word counts", async () => {
+  createCompletionSpy.mockResolvedValue(
+    streamFromChunks(['{"summary":"draft ', 'ready","mappingFields":[]}']),
+  );
+
+  const pipeline = defaultPipeline();
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  await wrapper.get('[data-testid="ai-generate-button"]').trigger("click");
+  await flushPromises();
+  await flushPromises();
+
+  const progressEvents = (wrapper.emitted("progress") ?? []).map(
+    ([payload]) => payload as {
+      busy: boolean;
+      step: string;
+      responseText: string;
+      wordsReceived: number;
+    },
+  );
+
+  expect(
+    progressEvents.some(
+      (payload) =>
+        payload.busy &&
+        payload.step === "Streaming partial response" &&
+        payload.responseText.includes('"draft ready"') &&
+        payload.wordsReceived > 0,
+    ),
+  ).toBe(true);
 });
 
 it("retries truncated structured JSON once without streaming before failing the draft", async () => {
@@ -634,4 +732,180 @@ it("batches compact mapping requests for wide schemas and merges the batch outpu
       transforms: [],
     })),
   );
+});
+
+it("exposes scoped target generation that merges only the selected mapping", async () => {
+  let resolveCompletion: (() => void) | undefined;
+  createCompletionSpy.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveCompletion = () =>
+          resolve({
+            choices: [
+              {
+                message: {
+                  content:
+                    '{"summary":"Scoped","mappingFields":[{"from":"full_name","to":"customer.name","transforms":[{"type":"trim"}]}]}',
+                },
+              },
+            ],
+          });
+      }),
+  );
+
+  const pipeline = defaultPipeline();
+  pipeline.mapping.fields = [
+    {
+      from: "customer_id",
+      to: "customer.id",
+      transforms: [{ type: "trim" }],
+    },
+  ];
+  pipeline.targetSchema = {
+    type: "object",
+    fields: [
+      {
+        name: "customer",
+        type: "object",
+        fields: [
+          { name: "id", type: "string" },
+          { name: "name", type: "string" },
+        ],
+      },
+    ],
+  };
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: "customer_id,full_name\n1001,Ada Lovelace",
+      autoApplyStructured: true,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  const generationPromise = (
+    wrapper.vm as unknown as {
+      generateForTargets: (targetPaths: string[]) => Promise<void>;
+    }
+  ).generateForTargets(["customer.name"]);
+  await flushPromises();
+
+  expect(wrapper.get('[data-testid="ai-target-scope"]').text()).toContain(
+    "customer.name",
+  );
+
+  resolveCompletion?.();
+  await generationPromise;
+  await flushPromises();
+
+  expect(createCompletionSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining(
+            "Only emit mappingFields for the target path customer.name.",
+          ),
+        }),
+      ]),
+    }),
+  );
+  expect(pipeline.mapping.fields).toEqual([
+    {
+      from: "customer_id",
+      to: "customer.id",
+      transforms: [{ type: "trim" }],
+    },
+    {
+      from: "full_name",
+      to: "customer.name",
+      transforms: [{ type: "trim" }],
+    },
+  ]);
+});
+
+it("reviews one likely local match without emitting or applying a mapping", async () => {
+  createCompletionSpy.mockResolvedValue(
+    streamFromChunks([
+      '{"approved":true,"confidence":"high","summary":"Looks right","rationale":"The target name and sample align with the displayed candidate."}',
+    ]),
+  );
+
+  const pipeline = defaultPipeline();
+  pipeline.pipeline.aiContext =
+    "Source rows are healthcare claims and claim frequency code indicates claim type.";
+  const originalMappings = JSON.parse(JSON.stringify(pipeline.mapping.fields));
+
+  const wrapper = mount(PipelineAiAssistant, {
+    props: {
+      pipeline,
+      samplePayload: defaultSamplePayload,
+      autoApplyStructured: true,
+      "onUpdate:pipeline": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  const result = await (
+    wrapper.vm as unknown as {
+      reviewSuggestedMatch: (options: {
+        targetPath: string;
+        candidateSource: string;
+        sourceSamplePreview: string;
+        targetSamplePreview: string;
+      }) => Promise<{
+        approved: boolean;
+        confidence: string;
+        summary: string;
+        rationale: string;
+      } | null>;
+    }
+  ).reviewSuggestedMatch({
+    targetPath: "Claim_Frequency_Code",
+    candidateSource: "Body.CodeEditClaims.Claims.Claim.ClaimCodes",
+    sourceSamplePreview: "No sample value",
+    targetSamplePreview: "1",
+  });
+  await flushPromises();
+  await flushPromises();
+
+  const firstRequest = createCompletionSpy.mock.calls[0]?.[0];
+  const userPrompt =
+    firstRequest?.messages?.find(
+      (message: { role: string; content: string }) => message.role === "user",
+    )?.content ?? "";
+
+  expect(result).toEqual({
+    approved: true,
+    confidence: "high",
+    summary: "Looks right",
+    rationale: "The target name and sample align with the displayed candidate.",
+  });
+  expect(createCompletionSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      response_format: {
+        type: "json_object",
+        schema: likelyMatchReviewResponseSchema,
+      },
+    }),
+  );
+  expect(userPrompt).toContain("Task: Review one likely local field match.");
+  expect(userPrompt).toContain("Claim_Frequency_Code");
+  expect(userPrompt).toContain("Body.CodeEditClaims.Claims.Claim.ClaimCodes");
+  expect(userPrompt).toContain("No sample value");
+  expect(userPrompt).toContain("1");
+  expect(userPrompt).toContain("Do not suggest a different field.");
+  expect(userPrompt).not.toContain("Current pipeline JSON:");
+  expect(wrapper.emitted("generated")).toBeUndefined();
+  expect(pipeline.mapping.fields).toEqual(originalMappings);
 });

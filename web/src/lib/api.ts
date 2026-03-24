@@ -20,6 +20,10 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     throw new Error(payload.error ?? "Request failed");
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 };
 
@@ -33,6 +37,10 @@ export const api = {
     }),
   getPipeline: (id: string) =>
     request<PipelineDefinition>(`/api/pipelines/${id}`),
+  deletePipeline: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/api/pipelines/${id}`, {
+      method: "DELETE",
+    }),
   inferSchema: (format: string, sample: string) =>
     request<SchemaDefinition>("/api/schema/infer", {
       method: "POST",
