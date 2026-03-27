@@ -4,6 +4,7 @@ import AppSelect from "./AppSelect.vue";
 import GenerationProgressModal from "./GenerationProgressModal.vue";
 import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
+import { connectorTypeOptions } from "../lib/connectorOptions";
 import {
   applyResolutionMapping,
   applyHighConfidenceSuggestedMappings,
@@ -39,7 +40,7 @@ const sampleOutput = defineModel<string>("sampleOutput", {
 });
 const emit = defineEmits<{ complete: [] }>();
 
-const connectorTypes = ["http", "file", "stdout", "postgres", "kafka"];
+const connectorTypes = connectorTypeOptions;
 const formatOptions = ["json", "csv", "tsv", "pipe", "xml"];
 const wizardDefaultModelId = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
 const xmlRepeatModeOptions = [
@@ -1033,6 +1034,7 @@ const completeWizard = async () => {
               v-model="pipeline.source.type"
               :options="connectorTypes"
               placeholder="Select a source connector"
+              data-testid="wizard-source-type-select"
             />
           </label>
           <label class="space-y-2 text-sm font-medium text-slate-700">
@@ -1041,6 +1043,7 @@ const completeWizard = async () => {
               v-model="pipeline.source.format"
               :options="formatOptions"
               placeholder="Select a source format"
+              data-testid="wizard-source-format-select"
             />
           </label>
         </div>
@@ -1075,6 +1078,7 @@ const completeWizard = async () => {
               v-model="pipeline.target.type"
               :options="connectorTypes"
               placeholder="Select a target connector"
+              data-testid="wizard-target-type-select"
             />
           </label>
           <label class="space-y-2 text-sm font-medium text-slate-700">
@@ -1083,6 +1087,7 @@ const completeWizard = async () => {
               v-model="pipeline.target.format"
               :options="formatOptions"
               placeholder="Select a target format"
+              data-testid="wizard-target-format-select"
             />
           </label>
         </div>

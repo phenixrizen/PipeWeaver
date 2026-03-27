@@ -412,7 +412,11 @@ watch(
           v-if="lookupSourceField(row.from)?.type === 'array'"
           class="mt-3 text-xs font-medium text-sky-700"
         >
-          Repeated source field detected. Use `preserve` to keep the array or `explode` to emit one row per item.
+          {{
+            props.sourceFormat === 'xml'
+              ? 'Repeated XML source field detected. Use `preserve` to keep the array, or choose its repeated branch below to drive one row per item.'
+              : 'Repeated source field detected. Use `preserve` to keep the array or `explode` to emit one row per item.'
+          }}
         </p>
         <div
           v-if="repeatBranchForRow(row)"

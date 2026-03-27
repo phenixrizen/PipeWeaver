@@ -5,6 +5,22 @@ import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import { likelyMatchReviewResponseSchema, structuredAiResponseSchema } from "../lib/ai";
 import { defaultPipeline, defaultSamplePayload } from "../lib/defaults";
 
+const selectDropdownOption = async (
+  wrapper: ReturnType<typeof mount>,
+  triggerSelector: string,
+  optionValue: string,
+) => {
+  await wrapper.get(triggerSelector).trigger("click");
+  const option = document.body.querySelector<HTMLElement>(
+    `[data-testid="app-select-option"][data-option-value="${optionValue}"]`,
+  );
+  if (!option) {
+    throw new Error(`Option ${optionValue} not found for ${triggerSelector}`);
+  }
+  option.click();
+  await flushPromises();
+};
+
 const {
   createCompletionSpy,
   createEngineSpy,
@@ -184,8 +200,12 @@ it("shows model size metadata and browser cache status", async () => {
 
   await flushPromises();
 
-  const modelOptions = wrapper.get('[data-testid="ai-model-select"]').findAll("option");
-  expect(modelOptions[0].text()).toContain("Llama 3.1 · 8B · ~5.0 GB VRAM");
+  await wrapper.get('[data-testid="ai-model-select"]').trigger("click");
+  const modelOptions = Array.from(
+    document.body.querySelectorAll<HTMLElement>('[data-testid="app-select-option"]'),
+  );
+  expect(modelOptions[0]?.textContent).toContain("Llama 3.1 · 8B · ~5.0 GB VRAM");
+  await wrapper.get('[data-testid="ai-model-select"]').trigger("click");
   expect(wrapper.get('[data-testid="ai-model-cache-status"]').text()).toContain(
     "Cached in browser",
   );
@@ -212,8 +232,7 @@ it("honors a wizard-specific fast model default and can hide the inline status p
   await flushPromises();
 
   expect(
-    (wrapper.get('[data-testid="ai-model-select"]').element as HTMLSelectElement)
-      .value,
+    (wrapper.find("select").element as HTMLSelectElement).value,
   ).toBe("Qwen2.5-1.5B-Instruct-q4f16_1-MLC");
   expect(wrapper.text()).toContain("Qwen 2.5 · 1.5B · ~1.6 GB VRAM");
   expect(wrapper.text()).not.toContain("No model activity yet.");
@@ -508,8 +527,7 @@ it("renders explain mode output as markdown instead of requiring JSON", async ()
     },
   });
 
-  const selects = wrapper.findAll("select");
-  await selects[1].setValue("explain");
+  await selectDropdownOption(wrapper, '[data-testid="ai-mode-select"]', "explain");
   await wrapper.get('[data-testid="ai-generate-button"]').trigger("click");
   await flushPromises();
   await flushPromises();

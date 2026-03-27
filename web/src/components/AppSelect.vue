@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, useAttrs, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useAttrs, watch } from "vue";
 
 defineOptions({ inheritAttrs: false });
 
@@ -10,12 +10,14 @@ type SelectOption =
       label: string;
       value: SelectOptionValue;
       disabled?: boolean;
+      description?: string;
     };
 
 type NormalizedSelectOption = {
   label: string;
   value: SelectOptionValue;
   disabled: boolean;
+  description?: string;
 };
 
 const props = withDefaults(
@@ -38,10 +40,26 @@ const emit = defineEmits<{
 
 const attrs = useAttrs();
 const showNativeMirror = import.meta.env.MODE === "test";
-const rootRef = ref<HTMLElement | null>(null);
+const triggerRef = ref<HTMLElement | null>(null);
+const menuRef = ref<HTMLElement | null>(null);
 const isOpen = ref(false);
 const highlightedIndex = ref(-1);
 const listboxId = `app-select-${Math.random().toString(36).slice(2)}`;
+const menuPosition = ref({
+  top: 0,
+  left: 0,
+  width: 0,
+});
+
+const triggerAttrs = computed(() => {
+  const next = { ...attrs } as Record<string, unknown>;
+  delete next["data-testid"];
+  return next;
+});
+
+const triggerTestId = computed(() =>
+  String(attrs["data-testid"] ?? "app-select-trigger"),
+);
 
 const normalizeOption = (option: SelectOption): NormalizedSelectOption => {
   if (typeof option === "object" && option !== null && "value" in option) {
@@ -49,6 +67,7 @@ const normalizeOption = (option: SelectOption): NormalizedSelectOption => {
       label: option.label,
       value: option.value,
       disabled: option.disabled ?? false,
+      description: option.description,
     };
   }
 
@@ -59,13 +78,17 @@ const normalizeOption = (option: SelectOption): NormalizedSelectOption => {
   };
 };
 
-const matchesValue = (optionValue: SelectOptionValue, candidate: SelectOptionValue | "") =>
-  String(optionValue) === String(candidate);
+const matchesValue = (
+  optionValue: SelectOptionValue,
+  candidate: SelectOptionValue | "",
+) => String(optionValue) === String(candidate);
 
 const normalizedOptions = computed(() => props.options.map(normalizeOption));
 
 const selectedIndex = computed(() =>
-  normalizedOptions.value.findIndex((option) => matchesValue(option.value, props.modelValue ?? "")),
+  normalizedOptions.value.findIndex((option) =>
+    matchesValue(option.value, props.modelValue ?? ""),
+  ),
 );
 
 const selectedOption = computed(() =>
@@ -81,7 +104,7 @@ const displayLabel = computed(() => {
     return String(props.modelValue);
   }
 
-  return props.placeholder;
+  return props.placeholder || "Select an option";
 });
 
 const firstEnabledIndex = () =>
@@ -125,13 +148,26 @@ const primeHighlight = () => {
   highlightedIndex.value = firstEnabledIndex();
 };
 
-const openMenu = () => {
-  if (props.disabled || !normalizedOptions.value.length) {
+const scrollHighlightedIntoView = () => {
+  const element = menuRef.value?.querySelector<HTMLElement>(
+    `[data-option-index="${highlightedIndex.value}"]`,
+  );
+  if (element && typeof element.scrollIntoView === "function") {
+    element.scrollIntoView({ block: "nearest" });
+  }
+};
+
+const updateMenuPosition = () => {
+  if (!triggerRef.value) {
     return;
   }
 
-  isOpen.value = true;
-  primeHighlight();
+  const rect = triggerRef.value.getBoundingClientRect();
+  menuPosition.value = {
+    top: rect.bottom + 8,
+    left: rect.left,
+    width: rect.width,
+  };
 };
 
 const closeMenu = () => {
@@ -139,13 +175,25 @@ const closeMenu = () => {
   highlightedIndex.value = -1;
 };
 
-const toggleMenu = () => {
+const openMenu = async () => {
+  if (props.disabled || !normalizedOptions.value.length) {
+    return;
+  }
+
+  isOpen.value = true;
+  primeHighlight();
+  await nextTick();
+  updateMenuPosition();
+  scrollHighlightedIntoView();
+};
+
+const toggleMenu = async () => {
   if (isOpen.value) {
     closeMenu();
     return;
   }
 
-  openMenu();
+  await openMenu();
 };
 
 const selectOption = (option: NormalizedSelectOption) => {
@@ -179,9 +227,10 @@ const moveHighlight = (step: 1 | -1) => {
           ? normalizedOptions.value.length - 1
           : 0;
   highlightedIndex.value = findEnabledIndex(startIndex, step);
+  nextTick(scrollHighlightedIntoView);
 };
 
-const onTriggerKeydown = (event: KeyboardEvent) => {
+const onTriggerKeydown = async (event: KeyboardEvent) => {
   if (props.disabled) {
     return;
   }
@@ -192,7 +241,7 @@ const onTriggerKeydown = (event: KeyboardEvent) => {
 
   if (event.key === "ArrowDown") {
     if (!isOpen.value) {
-      openMenu();
+      await openMenu();
       return;
     }
     moveHighlight(1);
@@ -201,7 +250,7 @@ const onTriggerKeydown = (event: KeyboardEvent) => {
 
   if (event.key === "ArrowUp") {
     if (!isOpen.value) {
-      openMenu();
+      await openMenu();
       return;
     }
     moveHighlight(-1);
@@ -209,13 +258,13 @@ const onTriggerKeydown = (event: KeyboardEvent) => {
   }
 
   if (event.key === "Home") {
-    openMenu();
+    await openMenu();
     highlightedIndex.value = firstEnabledIndex();
     return;
   }
 
   if (event.key === "End") {
-    openMenu();
+    await openMenu();
     highlightedIndex.value = lastEnabledIndex();
     return;
   }
@@ -227,7 +276,7 @@ const onTriggerKeydown = (event: KeyboardEvent) => {
 
   if (event.key === "Enter" || event.key === " ") {
     if (!isOpen.value) {
-      openMenu();
+      await openMenu();
       return;
     }
 
@@ -257,10 +306,25 @@ const onOptionKeydown = (event: KeyboardEvent) => {
   }
 };
 
-const handlePointerDown = (event: PointerEvent) => {
-  if (!rootRef.value?.contains(event.target as Node)) {
-    closeMenu();
+const onDocumentPointerDown = (event: PointerEvent) => {
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return;
   }
+
+  if (triggerRef.value?.contains(target) || menuRef.value?.contains(target)) {
+    return;
+  }
+
+  closeMenu();
+};
+
+const onWindowChange = () => {
+  if (!isOpen.value) {
+    return;
+  }
+
+  updateMenuPosition();
 };
 
 watch(isOpen, (open) => {
@@ -269,11 +333,15 @@ watch(isOpen, (open) => {
   }
 
   if (open) {
-    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("pointerdown", onDocumentPointerDown);
+    window.addEventListener("resize", onWindowChange);
+    window.addEventListener("scroll", onWindowChange, true);
     return;
   }
 
-  window.removeEventListener("pointerdown", handlePointerDown);
+  window.removeEventListener("pointerdown", onDocumentPointerDown);
+  window.removeEventListener("resize", onWindowChange);
+  window.removeEventListener("scroll", onWindowChange, true);
 });
 
 watch(
@@ -296,15 +364,19 @@ watch(
 
 onBeforeUnmount(() => {
   if (typeof window !== "undefined") {
-    window.removeEventListener("pointerdown", handlePointerDown);
+    window.removeEventListener("pointerdown", onDocumentPointerDown);
+    window.removeEventListener("resize", onWindowChange);
+    window.removeEventListener("scroll", onWindowChange, true);
   }
 });
 </script>
 
 <template>
-  <div ref="rootRef" class="relative w-full">
+  <div class="relative w-full">
     <button
-      data-testid="app-select-trigger"
+      ref="triggerRef"
+      v-bind="triggerAttrs"
+      :data-testid="triggerTestId"
       type="button"
       class="input flex items-center justify-between gap-3 text-left"
       :class="[
@@ -319,10 +391,10 @@ onBeforeUnmount(() => {
       @keydown="onTriggerKeydown"
     >
       <span
-        class="truncate"
+        class="min-w-0 flex-1 truncate"
         :class="selectedOption ? 'text-slate-900' : 'text-slate-400'"
       >
-        {{ displayLabel || "Select an option" }}
+        {{ displayLabel }}
       </span>
       <svg
         class="h-4 w-4 shrink-0 text-slate-400 transition-transform"
@@ -344,7 +416,6 @@ onBeforeUnmount(() => {
 
     <select
       v-if="showNativeMirror"
-      v-bind="attrs"
       class="sr-only"
       tabindex="-1"
       aria-hidden="true"
@@ -365,53 +436,66 @@ onBeforeUnmount(() => {
       </option>
     </select>
 
-    <div
-      v-if="isOpen"
-      :id="listboxId"
-      role="listbox"
-      class="absolute left-0 top-full z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-300/30"
-    >
-      <button
-        v-for="(option, index) in normalizedOptions"
-        :key="String(option.value)"
-        data-testid="app-select-option"
-        type="button"
-        role="option"
-        class="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition"
-        :class="[
-          option.disabled
-            ? 'cursor-not-allowed text-slate-300'
-            : selectedIndex === index
-              ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/10'
-              : highlightedIndex === index
-                ? 'bg-sky-50 text-slate-900'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
-        ]"
-        :aria-selected="selectedIndex === index"
-        :disabled="option.disabled"
-        @click="selectOption(option)"
-        @keydown="onOptionKeydown"
-        @mouseenter="highlightedIndex = option.disabled ? highlightedIndex : index"
-        @focus="highlightedIndex = option.disabled ? highlightedIndex : index"
+    <Teleport to="body">
+      <div
+        v-if="isOpen"
+        :id="listboxId"
+        ref="menuRef"
+        role="listbox"
+        class="fixed z-[120] overflow-hidden rounded-2xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-300/30"
+        :style="{
+          top: `${menuPosition.top}px`,
+          left: `${menuPosition.left}px`,
+          width: `${menuPosition.width}px`,
+        }"
       >
-        <span class="truncate">{{ option.label }}</span>
-        <svg
-          v-if="selectedIndex === index"
-          class="h-4 w-4 shrink-0"
-          viewBox="0 0 16 16"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-hidden="true"
-        >
-          <path
-            d="M3 8.25L6.2 11.25L13 4.75"
-            stroke="currentColor"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="1.8"
-          />
-        </svg>
-      </button>
-    </div>
+        <div class="max-h-80 overflow-auto">
+          <button
+            v-for="(option, index) in normalizedOptions"
+            :key="String(option.value)"
+            :data-option-index="index"
+            data-testid="app-select-option"
+            :data-option-value="String(option.value)"
+            type="button"
+            role="option"
+            class="w-full rounded-xl px-3 py-2 text-left text-sm transition"
+            :class="[
+              option.disabled
+                ? 'cursor-not-allowed text-slate-300'
+                : selectedIndex === index
+                  ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/10'
+                  : highlightedIndex === index
+                    ? 'bg-sky-50 text-slate-900'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900',
+            ]"
+            :aria-selected="selectedIndex === index"
+            :disabled="option.disabled"
+            @click="selectOption(option)"
+            @keydown="onOptionKeydown"
+            @mouseenter="highlightedIndex = option.disabled ? highlightedIndex : index"
+            @focus="highlightedIndex = option.disabled ? highlightedIndex : index"
+          >
+            <div class="min-w-0">
+              <p class="truncate font-semibold">
+                {{ option.label }}
+              </p>
+              <p
+                v-if="option.description"
+                class="mt-1 text-xs leading-5"
+                :class="
+                  selectedIndex === index
+                    ? 'text-sky-100'
+                    : highlightedIndex === index
+                      ? 'text-slate-600'
+                      : 'text-slate-500'
+                "
+              >
+                {{ option.description }}
+              </p>
+            </div>
+          </button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

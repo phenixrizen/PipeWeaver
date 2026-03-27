@@ -1,4 +1,4 @@
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import PipelineEditorForm from "./PipelineEditorForm.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
 import {
@@ -92,4 +92,47 @@ it("updates the source format when the sample payload editor detects one", async
   await wrapper.vm.$nextTick();
 
   expect(pipeline.source.format).toBe("xml");
+});
+
+it("hides postgres and kafka connectors while showing connector descriptions", async () => {
+  const wrapper = buildWrapper();
+
+  const sourceTrigger = wrapper
+    .findAll('button[aria-haspopup="listbox"]')
+    .find((button) => button.text().trim() === "http");
+
+  expect(sourceTrigger).toBeTruthy();
+  await sourceTrigger!.trigger("click");
+  await flushPromises();
+
+  expect(
+    document.body.querySelector('[data-option-value="postgres"]'),
+  ).toBeNull();
+  expect(
+    document.body.querySelector('[data-option-value="kafka"]'),
+  ).toBeNull();
+  expect(
+    document.body.querySelector('[data-option-value="http"]'),
+  ).not.toBeNull();
+  expect(document.body.textContent).toContain(
+    "Accept payloads through the generated HTTP endpoint.",
+  );
+
+  const targetTrigger = wrapper
+    .findAll('button[aria-haspopup="listbox"]')
+    .find((button) => button.text().trim() === "stdout");
+
+  expect(targetTrigger).toBeTruthy();
+  await targetTrigger!.trigger("click");
+  await flushPromises();
+
+  expect(
+    document.body.querySelector('[data-option-value="postgres"]'),
+  ).toBeNull();
+  expect(
+    document.body.querySelector('[data-option-value="kafka"]'),
+  ).toBeNull();
+  expect(document.body.textContent).toContain(
+    "Write the transformed payload to the process output stream.",
+  );
 });

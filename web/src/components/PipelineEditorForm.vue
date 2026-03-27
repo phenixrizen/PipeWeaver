@@ -8,6 +8,7 @@ import PipelineAiAssistant from "./PipelineAiAssistant.vue";
 import SamplePayloadEditor from "./SamplePayloadEditor.vue";
 import SchemaEditor from "./SchemaEditor.vue";
 import ValidationErrorsPanel from "./ValidationErrorsPanel.vue";
+import { connectorTypeOptions } from "../lib/connectorOptions";
 import type { PipelineDefinition, PreviewResult } from "../types/pipeline";
 
 const pipeline = defineModel<PipelineDefinition>({ required: true });
@@ -20,7 +21,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ save: []; preview: [] }>();
 
-const connectorTypes = ["http", "file", "stdout", "postgres", "kafka"];
+const connectorTypes = connectorTypeOptions;
 const formatOptions = ["json", "csv", "tsv", "pipe", "xml"];
 
 type EditorTab = {

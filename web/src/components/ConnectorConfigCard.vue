@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import AppSelect from "./AppSelect.vue";
+import type { ConnectorOption } from "../lib/connectorOptions";
 import type { ConnectorConfig } from "../types/pipeline";
 
 const model = defineModel<ConnectorConfig>({ required: true });
 const props = defineProps<{
   title: string;
-  connectorTypes: string[];
+  connectorTypes: Array<string | ConnectorOption>;
   formatOptions: string[];
 }>();
 

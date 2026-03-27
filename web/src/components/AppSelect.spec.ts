@@ -15,10 +15,10 @@ it("renders a styled dropdown and emits updates from the visible menu", async ()
   );
 
   await wrapper.get('[data-testid="app-select-trigger"]').trigger("click");
-  const options = wrapper.findAll('[data-testid="app-select-option"]');
+  const options = document.body.querySelectorAll('[data-testid="app-select-option"]');
   expect(options).toHaveLength(3);
 
-  await options[1]!.trigger("click");
+  (options[1] as HTMLElement | undefined)?.click();
 
   expect(wrapper.emitted("update:modelValue")).toEqual([["csv"]]);
 });

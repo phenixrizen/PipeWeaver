@@ -160,15 +160,16 @@ const scopedTargetLabel = computed(() => {
 const selectedModelOption = computed(
   () => aiModelOptions.find((option) => option.id === selectedModel.value) ?? aiModelOptions[0],
 );
-const modelSelectOptions = computed(() =>
+const aiModelDropdownOptions = computed(() =>
   aiModelOptions.map((option) => ({
     value: option.id,
     label: option.dropdownLabel,
+    description: option.note,
   })),
 );
-const modeSelectOptions = computed(() =>
+const aiModeDropdownOptions = computed(() =>
   Object.entries(aiModeLabels).map(([mode, label]) => ({
-    value: mode as AiDraftMode,
+    value: mode,
     label,
   })),
 );
@@ -1368,7 +1369,7 @@ defineExpose({
         <AppSelect
           v-model="selectedModel"
           data-testid="ai-model-select"
-          :options="modelSelectOptions"
+          :options="aiModelDropdownOptions"
         />
         <p class="text-xs leading-5 text-slate-500">
           {{ selectedModelOption.note }}
@@ -1390,7 +1391,8 @@ defineExpose({
         <span>Draft task</span>
         <AppSelect
           v-model="selectedMode"
-          :options="modeSelectOptions"
+          data-testid="ai-mode-select"
+          :options="aiModeDropdownOptions"
           :disabled="Boolean(forcedMode)"
         />
         <p

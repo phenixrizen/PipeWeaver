@@ -17,6 +17,21 @@ const {
   reviewSuggestedMatchSpy: vi.fn(),
   cancelGenerationSpy: vi.fn(),
 }));
+const selectDropdownOption = async (
+  wrapper: ReturnType<typeof mount>,
+  triggerSelector: string,
+  optionValue: string,
+) => {
+  await wrapper.get(triggerSelector).trigger("click");
+  const option = document.body.querySelector<HTMLElement>(
+    `[data-testid="app-select-option"][data-option-value="${optionValue}"]`,
+  );
+  if (!option) {
+    throw new Error(`Option ${optionValue} not found for ${triggerSelector}`);
+  }
+  option.click();
+  await flushPromises();
+};
 
 const SamplePayloadEditorStub = defineComponent({
   props: {
@@ -406,14 +421,12 @@ it("emits complete with an empty target schema tailored to the chosen target for
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("xml");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "xml");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.find('input[type="checkbox"]').setValue(true);
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
   await flushPromises();
@@ -455,14 +468,12 @@ it("infers the target schema from the sample output before opening the editor", 
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("xml");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "xml");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
   await flushPromises();
   await wrapper.get('[data-testid="wizard-complete-button"]').trigger("click");
@@ -499,9 +510,8 @@ it("auto-selects the target format when the sample output editor detects one", a
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("xml");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "xml");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
   const sampleEditors = wrapper.findAllComponents(SamplePayloadEditorStub);
@@ -578,14 +588,12 @@ it("infers a primary row driver when the target sample fans repeated xml values 
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("xml");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "xml");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
   await flushPromises();
   await wrapper.get('[data-testid="wizard-complete-button"]').trigger("click");
@@ -671,9 +679,11 @@ it("lets the user override the inferred row driver from the wizard", async () =>
 
   expect(pipeline.mapping.rowDriverPath).toBe("claim.lines.line");
 
-  await wrapper
-    .get('[data-testid="wizard-row-driver-select"]')
-    .setValue("claim.diagnoses.diagnosis");
+  await selectDropdownOption(
+    wrapper,
+    '[data-testid="wizard-row-driver-select"]',
+    "claim.diagnoses.diagnosis",
+  );
 
   expect(pipeline.mapping.rowDriverPath).toBe("claim.diagnoses.diagnosis");
 });
@@ -703,14 +713,12 @@ it("skips the AI fallback when high-confidence local matching resolves every tar
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("json");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "json");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
   await flushPromises();
 
@@ -763,14 +771,12 @@ it("shows likely local matches for indexed targets and lets the user apply them 
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("xml");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "xml");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
   await flushPromises();
 
@@ -821,14 +827,12 @@ it("opens the generate step immediately and keeps local preparation inside the p
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("json");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "json");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
   expect(wrapper.find('[data-testid="generation-progress-modal"]').exists()).toBe(true);
@@ -924,14 +928,12 @@ it("shows and persists the optional data context field on the generate step", as
   );
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const sourceSelects = wrapper.findAll("select");
-  await sourceSelects[0].setValue("http");
-  await sourceSelects[1].setValue("json");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-type-select"]', "http");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-source-format-select"]', "json");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
 
-  const targetSelects = wrapper.findAll("select");
-  await targetSelects[0].setValue("stdout");
-  await targetSelects[1].setValue("csv");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-type-select"]', "stdout");
+  await selectDropdownOption(wrapper, '[data-testid="wizard-target-format-select"]', "csv");
   await wrapper.get('[data-testid="wizard-next-button"]').trigger("click");
   await flushPromises();
 
