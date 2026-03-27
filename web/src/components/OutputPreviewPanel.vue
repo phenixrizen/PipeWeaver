@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import MonacoCodeEditor from "./MonacoCodeEditor.vue";
+import { resolveFormatEditorLanguage } from "../lib/editorLanguage";
 import { isTabularFormat, parseTabularPreviewData } from "../lib/schema";
 import type { PreviewResult } from "../types/pipeline";
 
@@ -37,16 +38,9 @@ const rawPreviewText = computed(
   () => props.preview?.encodedOutput || "Run a preview to see transformed output.",
 );
 
-const previewLanguage = computed(() => {
-  switch (props.format) {
-    case "json":
-      return "json";
-    case "xml":
-      return "xml";
-    default:
-      return "plaintext";
-  }
-});
+const previewLanguage = computed(() =>
+  resolveFormatEditorLanguage(props.format),
+);
 
 const canShowTable = computed(
   () => Boolean(props.preview?.encodedOutput?.trim()) && isTabularFormat(props.format),

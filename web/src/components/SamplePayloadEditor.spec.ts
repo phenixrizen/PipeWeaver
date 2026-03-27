@@ -9,11 +9,16 @@ const MonacoStub = defineComponent({
       type: String,
       default: "",
     },
+    language: {
+      type: String,
+      default: "plaintext",
+    },
   },
   emits: ["update:modelValue"],
   template: `
     <textarea
       :value="modelValue"
+      :data-language="language"
       @input="$emit('update:modelValue', $event.target.value)"
     />
   `,
@@ -108,4 +113,21 @@ it("shows a guided empty state instead of a blank editor when no sample output i
     "No sample output loaded yet",
   );
   expect(wrapper.text()).toContain("Select a target format above");
+});
+
+it("passes Monaco the matching tabular language for supported formats", () => {
+  const wrapper = mount(SamplePayloadEditor, {
+    props: {
+      modelValue: "name|code\nBob|12345",
+      format: "pipe",
+      "onUpdate:modelValue": () => undefined,
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  expect(wrapper.get("textarea").attributes("data-language")).toBe("pipe");
 });

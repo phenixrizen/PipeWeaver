@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Teleport, computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { editor as MonacoEditor, IDisposable } from "monaco-editor";
+import { editorFileExtensionForLanguage } from "../lib/editorLanguage";
 import { ensureMonacoEnvironment } from "../lib/monaco";
 
 const props = withDefaults(
@@ -171,7 +172,7 @@ onMounted(async () => {
   monaco = (await import("../lib/monaco-editor")).default;
 
   const uri = monaco.Uri.parse(
-    `file:///pipeweaver/${Math.random().toString(36).slice(2)}.${props.language === "json" ? "json" : props.language === "javascript" ? "js" : "txt"}`,
+    `file:///pipeweaver/${Math.random().toString(36).slice(2)}.${editorFileExtensionForLanguage(props.language)}`,
   );
 
   model = monaco.editor.createModel(props.modelValue, props.language, uri);

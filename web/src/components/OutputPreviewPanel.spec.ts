@@ -40,6 +40,9 @@ it("renders preview output in the read-only editor", () => {
   });
 
   expect(wrapper.get('[data-testid="preview-editor"]').text()).toContain('{"ok":true}');
+  expect(wrapper.get('[data-testid="preview-editor"]').attributes("data-language")).toBe(
+    "json",
+  );
   expect(wrapper.text()).toContain("Last run 3 ms");
 });
 
@@ -92,4 +95,27 @@ it("shows a table toggle for csv previews and renders table rows", async () => {
   expect(wrapper.text()).toContain("code");
   expect(wrapper.text()).toContain("12345");
   expect(wrapper.text()).toContain("67890");
+});
+
+it("uses the tabular Monaco language for raw csv preview output", () => {
+  const wrapper = mount(OutputPreviewPanel, {
+    props: {
+      format: "csv",
+      preview: {
+        inputRecords: [],
+        outputRecords: [],
+        encodedOutput: "name,code\nBob,12345",
+        durationMs: 10,
+      },
+    },
+    global: {
+      stubs: {
+        MonacoCodeEditor: MonacoStub,
+      },
+    },
+  });
+
+  expect(wrapper.get('[data-testid="preview-editor"]').attributes("data-language")).toBe(
+    "csv",
+  );
 });

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import MonacoCodeEditor from "./MonacoCodeEditor.vue";
+import { resolveFormatEditorLanguage } from "../lib/editorLanguage";
 
 const props = withDefaults(
   defineProps<{
@@ -46,20 +47,7 @@ const emptyStateDescription = computed(() => {
     : `Paste representative ${formatLabel} input here or drop a file to exercise parsing, mapping, and preview behavior.`;
 });
 
-const language = computed(() => {
-  switch (props.format) {
-    case "json":
-      return "json";
-    case "xml":
-      return "xml";
-    case "csv":
-    case "tsv":
-    case "pipe":
-      return "plaintext";
-    default:
-      return "plaintext";
-  }
-});
+const language = computed(() => resolveFormatEditorLanguage(props.format));
 
 const handleDragEnter = () => {
   isDragActive.value = true;
